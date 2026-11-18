@@ -1690,7 +1690,7 @@
           });
         }
         var text = new TextDecoder('utf-8').decode(buf);
-        if ((text.match(/�/g) || []).length > 5) { try { text = new TextDecoder('windows-1256').decode(buf); } catch (e) { /* keep utf-8 */ } }
+        if ((text.match(/\uFFFD/g) || []).length > 5) { try { text = new TextDecoder('windows-1256').decode(buf); } catch (e) { /* keep utf-8 */ } }
         return { rows: parseStatement(text), sample: '' };
       }).then(function (res) {
         passIn.value = '';

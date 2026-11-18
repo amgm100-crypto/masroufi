@@ -347,10 +347,20 @@ button.pill:focus-visible { outline: 2px solid var(--focus); }
   @keyframes fade { from { opacity: .4; } }
 }
 
+/* حساباتي */
+.acct-card { border-top: 4px solid var(--bar); }
+.acct-card.alinma { border-top-color: var(--brass); }
+.acct-card.other { border-top-color: var(--line-2); }
+.acct-strip { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; }
+.acct-strip button { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); color: var(--ink); text-align: right; font-size: 12.5px; }
+.acct-strip button:hover { background: var(--surface-2); }
+.acct-strip strong { font-size: 15px; }
+
 </style>
 <div id="app" dir="rtl" lang="ar"></div>
 <script>
 document.documentElement.setAttribute('dir','rtl');document.documentElement.setAttribute('lang','ar');
+window.MASROUFI_PDFJS = { lib: 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js', worker: 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js' };
 /* مصروفي — تطبيق مصروف شخصي يعمل بالكامل داخل المتصفح.
  * الأمان:
  *  - كل البيانات مشفّرة بـ AES-GCM 256 بمفتاح مشتق من اسم المستخدم وكلمة المرور (PBKDF2-SHA256، 600,000 دورة).
@@ -473,7 +483,7 @@ document.documentElement.setAttribute('dir','rtl');document.documentElement.setA
   // ---------------------------------------------------------------- نموذج البيانات + التحقق
   function emptyState() {
     return { v: 1, setup: false, demo: false, profile: { name: '', balance: 0, lockMinutes: 5 },
-      sources: [], incomes: [], expenses: [], debts: [], entities: [] };
+      sources: [], incomes: [], expenses: [], debts: [], entities: [], accounts: [] };
   }
   // يعيد بناء الحالة من حقول معروفة فقط، ويرفض أي قيمة غير صالحة (يحمي من ملفات نسخ احتياطي معدّلة)
   function normalize(raw) {
@@ -483,6 +493,7 @@ document.documentElement.setAttribute('dir','rtl');document.documentElement.setA
     var arr = function (x, lim) { return Array.isArray(x) ? x.slice(0, lim || 20000) : []; };
     var id = function (x) { return typeof x === 'string' && /^[a-f0-9]{6,32}$/.test(x) ? x : uid(); };
     var txt = function (x) { return cleanText(x); };
+    var acc = function (x) { return typeof x === 'string' && /^[a-f0-9]{6,32}$/.test(x) ? x : ''; };
     var mk = function (x) { return typeof x === 'string' && /^\d{4}-\d{2}$/.test(x) ? x : mkey(today()); };
     s.demo = raw.demo === true;
     s.setup = raw.setup === true;
@@ -497,11 +508,11 @@ document.documentElement.setAttribute('dir','rtl');document.documentElement.setA
     });
     arr(raw.incomes).forEach(function (x) {
       var a = amt(x && x.amount); if (!a || !validDate(x.date)) return;
-      s.incomes.push({ id: id(x.id), date: x.date, source: txt(x.source) || 'إيراد آخر', amount: a, note: txt(x.note) });
+      s.incomes.push({ id: id(x.id), date: x.date, source: txt(x.source) || 'إيراد آخر', amount: a, note: txt(x.note), acct: acc(x.acct) });
     });
     arr(raw.expenses).forEach(function (x) {
       var a = amt(x && x.amount); if (!a || !validDate(x.date)) return;
-      s.expenses.push({ id: id(x.id), date: x.date, desc: txt(x.desc) || 'بدون وصف', cat: CATS.indexOf(x.cat) >= 0 ? x.cat : 'أخرى', amount: a });
+      s.expenses.push({ id: id(x.id), date: x.date, desc: txt(x.desc) || 'بدون وصف', cat: CATS.indexOf(x.cat) >= 0 ? x.cat : 'أخرى', amount: a, acct: acc(x.acct) });
     });
     arr(raw.debts, 500).forEach(function (x) {
       var t = amt(x && x.total); if (!t || !txt(x.name)) return;
@@ -524,9 +535,16 @@ document.documentElement.setAttribute('dir','rtl');document.documentElement.setA
         e.moves.push({ id: id(y.id), date: y.date, dir: dirv, amount: a, desc: txt(y.desc),
           invoice: e.type === 'c' && dirv === 'out' && !y.xfer ? (y.invoice === 'yes' ? 'yes' : 'no') : '',
           avail: !(e.type === 'a' && dirv === 'in' && y.avail === false),
-          xfer: y.xfer === true, link: typeof y.link === 'string' && /^[a-f0-9]{6,32}$/.test(y.link) ? y.link : '' });
+          xfer: y.xfer === true, link: typeof y.link === 'string' && /^[a-f0-9]{6,32}$/.test(y.link) ? y.link : '', acct: acc(y.acct) });
       });
       s.entities.push(e);
+    });
+    arr(raw.accounts, 50).forEach(function (x) {
+      if (!x || !cleanText(x.name, 40)) return;
+      var kind = ['current', 'savings', 'credit'].indexOf(x.kind) >= 0 ? x.kind : 'current';
+      var bal = typeof x.balance === 'number' && isFinite(x.balance) && Math.abs(x.balance) <= MAX_AMOUNT ? Math.round(x.balance * 100) / 100 : 0;
+      s.accounts.push({ id: id(x.id), bank: ['rajhi', 'alinma', 'other'].indexOf(x.bank) >= 0 ? x.bank : 'other', name: cleanText(x.name, 40), kind: kind,
+        last4: typeof x.last4 === 'string' && /^\d{4}$/.test(x.last4) ? x.last4 : '', balance: bal, limit: amt(x.limit, true) || 0, asOf: validDate(x.asOf) ? x.asOf : '' });
     });
     return s;
   }
@@ -682,7 +700,7 @@ document.documentElement.setAttribute('dir','rtl');document.documentElement.setA
 
   // ---------------------------------------------------------------- واجهة
   var root = $('app');
-  function freshUi() { return { tab: 'dash', month: mkey(today()), confirm: null, review: null, msgs: {}, backupText: '', expanded: {}, xfer: null }; }
+  function freshUi() { return { tab: 'dash', month: mkey(today()), confirm: null, review: null, msgs: {}, backupText: '', expanded: {}, xfer: null, editAcct: null, importAcct: '', reviewAcct: '', pdfPass: false, pdfSample: '' }; }
   var ui = freshUi();
 
   var toastTimer = null;
@@ -723,7 +741,8 @@ document.documentElement.setAttribute('dir','rtl');document.documentElement.setA
     trash: 'M4 7h16 M9 7V4h6v3 M6 7l1 13h10l1-13',
     logout: 'M15 4h4v16h-4 M10 8l-4 4 4 4 M6 12h10',
     file: 'M14 3H6v18h12V7z M14 3v4h4 M9 13h6 M9 17h4',
-    inbox: 'M3 13l3-8h12l3 8v6H3z M3 13h5l1 3h6l1-3h5'
+    inbox: 'M3 13l3-8h12l3 8v6H3z M3 13h5l1 3h6l1-3h5',
+    bank: 'M3 10l9-6 9 6 M5 10v8 M9.5 10v8 M14.5 10v8 M19 10v8 M3 20h18'
   };
   function icon(name) {
     var s = document.createElementNS(SVGNS, 'svg');
@@ -1014,6 +1033,7 @@ document.documentElement.setAttribute('dir','rtl');document.documentElement.setA
   // ---------- الإطار العام
   var TABS = [
     { id: 'dash', group: 'عام', icon: 'dash', label: 'لوحة التحكم', sub: function () { return 'ملخص وضعك المالي لشهر ' + monthName(ui.month); } },
+    { id: 'accounts', group: 'عام', icon: 'bank', label: 'حساباتي', sub: function () { return 'حساباتك البنكية وبطاقاتك وأرصدتها'; }, count: function () { return S().accounts.length; } },
     { id: 'income', group: 'عام', icon: 'income', label: 'الإيرادات', sub: function () { return 'رواتبك ودخلك من كل مصدر'; }, count: function () { return S().sources.length; } },
     { id: 'exp', group: 'عام', icon: 'exp', label: 'المصروفات', sub: function () { return 'مصروف الشهر مقسّم حسب نوعه'; } },
     { id: 'debts', group: 'الالتزامات', icon: 'debts', label: 'الديون', sub: function () { return 'المسدَّد والمتبقي، واللي لك عند الآخرين'; }, count: function () { return activeDebts('on').length; } },
@@ -1075,7 +1095,7 @@ document.documentElement.setAttribute('dir','rtl');document.documentElement.setA
           persist(); render(); toast('مُسحت البيانات التوضيحية.');
         } }, 'ابدأ ببياناتي')));
     }
-    inner.appendChild(({ dash: viewDash, income: viewIncome, exp: viewExp, debts: viewDebts, custody: viewCustody, amanat: viewAmanat, upload: viewUpload, settings: viewSettings })[tab.id]());
+    inner.appendChild(({ dash: viewDash, accounts: viewAccounts, income: viewIncome, exp: viewExp, debts: viewDebts, custody: viewCustody, amanat: viewAmanat, upload: viewUpload, settings: viewSettings })[tab.id]());
     root.replaceChildren(el('div', { class: 'app' }, rail, el('main', { class: 'main' }, inner)));
     window.scrollTo(0, y);
   }
@@ -1122,28 +1142,33 @@ document.documentElement.setAttribute('dir','rtl');document.documentElement.setA
       stat('أمانات متوفرة عندك', fmt(amanat), (function () { var p = sum(ents('a'), entPending); return p ? 'وغير متوفر ' + fmt(p) + ' ر.س' : ents('a').filter(function (e) { return entBal(e) > 0; }).length + ' جهة'; })(), { color: 'c-green', icon: 'amanat' })));
 
     // الرصيد ليس كله لك
-    var bal = S().profile.balance;
-    var mine = bal - custody - amanat;
+    var bal = totalBalance(), cUsed = creditUsed(), hasAccts = bankAccts().length > 0;
+    var mine = bal - custody - amanat - cUsed;
     var balCard = el('section', { class: 'card' },
-      el('div', { class: 'card-head' }, sectionTitle('wallet', 'رصيد حسابك ليس كله لك'), el('span', { class: 'meta num' }, 'الرصيد الحالي ' + fmt(bal) + ' ر.س')));
+      el('div', { class: 'card-head' }, sectionTitle('wallet', 'رصيد حسابك ليس كله لك'), el('span', { class: 'meta num' }, (hasAccts ? 'مجموع ' + bankAccts().length + ' حسابات ' : 'الرصيد الحالي ') + fmt(bal) + ' ر.س')));
     if (bal > 0) {
-      var tot = Math.max(bal, custody + amanat);
+      var tot = Math.max(bal, custody + amanat + cUsed);
       balCard.appendChild(el('div', { class: 'split', role: 'img', 'aria-label': 'لك ' + fmt(Math.max(0, mine)) + '، عهد ' + fmt(custody) + '، أمانات ' + fmt(amanat) },
         mine > 0 ? el('span', { css: { width: (mine / tot * 100) + '%', background: 'var(--hero)' } }) : null,
         custody > 0 ? el('span', { css: { width: (custody / tot * 100) + '%', background: 'var(--brass)' } }) : null,
-        amanat > 0 ? el('span', { css: { width: (amanat / tot * 100) + '%', background: 'var(--green-bar)' } }) : null));
+        amanat > 0 ? el('span', { css: { width: (amanat / tot * 100) + '%', background: 'var(--green-bar)' } }) : null,
+        cUsed > 0 ? el('span', { css: { width: (cUsed / tot * 100) + '%', background: 'var(--red)' } }) : null));
       var leg = function (color, label, v, share) {
         return el('div', null, el('span', { class: 'k' }, el('i', { class: 'sw', css: { background: color } }), label),
           el('span', { class: 'v' }, fmt(v), el('small', null, ' ر.س · ' + Math.round(Math.max(0, v) / tot * 100) + '%')));
       };
       balCard.appendChild(el('div', { class: 'legend' },
-        leg('var(--hero)', 'لك فعليًا', mine), leg('var(--brass)', 'عهد', custody), leg('var(--green-bar)', 'أمانات', amanat)));
-      if (mine < 0) balCard.appendChild(el('div', { class: 'callout warn' }, icon('alert'), el('div', null, el('strong', null, 'رصيدك أقل من العهد والأمانات'), el('span', null, 'صرفت ' + fmt(-mine) + ' ر.س من أموال غيرك. رتّب تعويضها قبل التصفية.'))));
+        leg('var(--hero)', 'لك فعليًا', mine), leg('var(--brass)', 'عهد', custody), leg('var(--green-bar)', 'أمانات', amanat), cUsed > 0 ? leg('var(--red)', 'مستحق للبطاقة', cUsed) : null));
+      if (mine < 0) balCard.appendChild(el('div', { class: 'callout warn' }, icon('alert'), el('div', null, el('strong', null, 'رصيدك أقل من العهد والأمانات'), el('span', null, 'ينقصك ' + fmt(-mine) + ' ر.س لتغطية العهد والأمانات' + (cUsed ? ' ومستحق البطاقة' : '') + '. رتّب تعويضها قبل التصفية.'))));
     } else {
-      balCard.appendChild(emptyOf('wallet', 'اكتب رصيد حسابك الحالي، ونوريك كم منه لك فعليًا بعد العهد والأمانات.'));
+      balCard.appendChild(emptyOf('wallet', hasAccts ? 'استورد كشوف حساباتك، ويتحدث الرصيد تلقائيًا.' : 'اكتب رصيد حسابك الحالي، أو أضف حساباتك من «حساباتي»، ونوريك كم منه لك فعليًا بعد العهد والأمانات.'));
     }
+    if (hasAccts) balCard.appendChild(el('div', { class: 'acct-strip' }, S().accounts.map(function (a) {
+      return el('button', { type: 'button', onclick: function () { ui.tab = 'accounts'; render(); window.scrollTo(0, 0); } },
+        el('span', null, a.name), el('strong', { class: 'num' + (a.kind === 'credit' ? ' c-red' : '') }, (a.kind === 'credit' ? '− ' : '') + fmt(a.balance)));
+    })));
     var balIn = amtInput(); balIn.value = bal ? String(bal) : '';
-    balCard.appendChild(composer('wallet', 'تحديث الرصيد',
+    if (!hasAccts) balCard.appendChild(composer('wallet', 'تحديث الرصيد',
       el('form', { class: 'form', onsubmit: function (e) {
         e.preventDefault(); var a = parseAmount(balIn.value, true);
         if (a === null) return fail('bal', 'اكتب الرصيد رقمًا صحيحًا (حتى منزلتين عشريتين).');
@@ -1663,40 +1688,398 @@ document.documentElement.setAttribute('dir','rtl');document.documentElement.setA
     if (links.length) S().entities.forEach(function (x) { x.moves = x.moves.filter(function (m) { return links.indexOf(m.link) < 0; }); });
   }
 
-  // ---------- استيراد كشف الحساب (CSV) — يُقرأ محليًا فقط
+  // ---------- حساباتي
+  var BANKS = [['rajhi', 'مصرف الراجحي'], ['alinma', 'مصرف الإنماء'], ['other', 'بنك آخر']];
+  var KINDS = [['current', 'حساب جاري'], ['savings', 'حساب ادخار'], ['credit', 'بطاقة ائتمانية']];
+  function bankName(b) { return (BANKS.filter(function (x) { return x[0] === b; })[0] || BANKS[2])[1]; }
+  function kindName(k) { return (KINDS.filter(function (x) { return x[0] === k; })[0] || KINDS[0])[1]; }
+  function findAcct(id) { return S().accounts.filter(function (a) { return a.id === id; })[0]; }
+  function acctLabel(a) { return a.name + (a.last4 ? ' •' + a.last4 : ''); }
+  function bankAccts() { return S().accounts.filter(function (a) { return a.kind !== 'credit'; }); }
+  function creditAccts() { return S().accounts.filter(function (a) { return a.kind === 'credit'; }); }
+  // مجموع أرصدة الحسابات البنكية، أو الرصيد اليدوي إذا ما فيه حسابات
+  function totalBalance() { var b = bankAccts(); return b.length ? sum(b, function (a) { return a.balance; }) : S().profile.balance; }
+  function creditUsed() { return sum(creditAccts(), function (a) { return a.balance; }); }
+
+  function viewAccounts() {
+    var wrap = el('div', { class: 'stack' });
+    var list = S().accounts;
+    wrap.appendChild(el('div', { class: 'note' }, icon('info'), 'أضف حساباتك البنكية وبطاقاتك، وبعدها استورد كشف كل حساب. الرصيد يتحدث تلقائيًا من آخر كشف، والتحويلات بين حساباتك ما تنحسب مصروفًا ولا دخلًا.'));
+    if (!list.length) {
+      wrap.appendChild(el('section', { class: 'card' }, sectionTitle('bank', 'ابدأ بحساباتك'),
+        el('p', { css: { margin: '0', color: 'var(--ink-2)', 'font-size': '14px' } }, 'نجهّز لك أربعة حسابات في الراجحي، وحسابين في الإنماء، وبطاقة فيزا بحد 3,000 ر.س. بعدها تعدّل أسماءها وآخر 4 أرقام من كل حساب.'),
+        el('div', null, el('button', { type: 'button', class: 'btn', onclick: function () {
+          var mk = function (bank, name, kind, limit) { return { id: uid(), bank: bank, name: name, kind: kind, last4: '', balance: 0, limit: limit || 0, asOf: '' }; };
+          S().accounts = [mk('rajhi', 'الراجحي 1', 'current'), mk('rajhi', 'الراجحي 2', 'current'), mk('rajhi', 'الراجحي 3', 'current'), mk('rajhi', 'الراجحي 4', 'current'),
+            mk('alinma', 'الإنماء 1', 'current'), mk('alinma', 'الإنماء 2', 'current'), mk('other', 'بطاقة فيزا', 'credit', 3000)];
+          commit('acct', 'أُضيفت 7 حسابات. عدّل أسماءها وأرقامها من زر «تعديل».');
+        } }, icon('plus'), 'تجهيز حساباتي السبعة'))));
+    } else {
+      var bal = totalBalance(), used = creditUsed(), lim = sum(creditAccts(), function (a) { return a.limit; });
+      wrap.appendChild(el('div', { class: 'grid' },
+        stat('مجموع أرصدة حساباتك', fmt(bal), bankAccts().length + ' حسابات بنكية', { icon: 'bank' }),
+        creditAccts().length ? stat('المستخدم من البطاقات', fmt(used), 'المتاح ' + fmt(Math.max(0, lim - used)) + ' من ' + fmt(lim) + ' ر.س', { icon: 'debts', color: used > lim * 0.8 ? 'c-red' : '' }) : null));
+    }
+    wrap.appendChild(msgEl('acct'));
+
+    if (list.length) wrap.appendChild(el('div', { class: 'grid', css: { 'grid-template-columns': 'repeat(auto-fit, minmax(260px, 1fr))' } }, list.map(acctCard)));
+
+    // إضافة حساب
+    var aName = txtInput('مثال: الراجحي — الراتب', 40), aBank = select(BANKS, 'rajhi'), aKind = select(KINDS, 'current');
+    var aLast = el('input', { type: 'text', inputmode: 'numeric', maxlength: '4', placeholder: '1234', dir: 'ltr', autocomplete: 'off' });
+    var aLimit = amtInput(); var limWrap = field('ac-limit', 'حد البطاقة', aLimit); limWrap.hidden = true;
+    aKind.addEventListener('change', function () { limWrap.hidden = aKind.value !== 'credit'; });
+    wrap.appendChild(el('section', { class: 'card' }, sectionTitle('plus', 'إضافة حساب أو بطاقة'),
+      el('form', { class: 'form', onsubmit: function (e) {
+        e.preventDefault();
+        var n = cleanText(aName.value, 40), l4 = latinDigits(aLast.value).trim();
+        if (!n) return fail('acadd', 'اكتب اسم الحساب.');
+        if (l4 && !/^\d{4}$/.test(l4)) return fail('acadd', 'آخر 4 أرقام فقط، أرقام بدون مسافات.');
+        var lim2 = aKind.value === 'credit' ? parseAmount(aLimit.value) : 0;
+        if (aKind.value === 'credit' && lim2 === null) return fail('acadd', 'اكتب حد البطاقة.');
+        S().accounts.push({ id: uid(), bank: aBank.value, name: n, kind: aKind.value, last4: l4, balance: 0, limit: lim2 || 0, asOf: '' });
+        commit('acadd', 'أُضيف «' + n + '».');
+      } }, field('ac-name', 'اسم الحساب', aName, true), field('ac-bank', 'البنك', aBank), field('ac-kind', 'النوع', aKind), field('ac-last', 'آخر 4 أرقام', aLast, false, 'لا تكتب رقم الحساب كاملًا'), limWrap,
+        el('button', { class: 'btn', type: 'submit' }, 'إضافة')), msgEl('acadd')));
+    return wrap;
+  }
+
+  function acctCard(a) {
+    var isCr = a.kind === 'credit';
+    if (ui.editAcct === a.id) {
+      var n = txtInput('', 40); n.value = a.name;
+      var b = select(BANKS, a.bank), k = select(KINDS, a.kind);
+      var l4 = el('input', { type: 'text', inputmode: 'numeric', maxlength: '4', dir: 'ltr', value: a.last4 });
+      var balIn = amtInput(); balIn.value = String(a.balance);
+      var limIn = amtInput(); limIn.value = String(a.limit || '');
+      var limW = field('ed-lim-' + a.id, 'حد البطاقة', limIn); limW.hidden = a.kind !== 'credit';
+      var balW = field('ed-bal-' + a.id, a.kind === 'credit' ? 'المستخدم من البطاقة' : 'الرصيد الحالي', balIn);
+      k.addEventListener('change', function () { limW.hidden = k.value !== 'credit'; balW.querySelector('label').textContent = k.value === 'credit' ? 'المستخدم من البطاقة' : 'الرصيد الحالي'; });
+      return el('section', { class: 'card acct-card' }, el('h2', { css: { 'font-size': '16px' } }, 'تعديل «' + a.name + '»'),
+        el('form', { class: 'stack-form', css: { display: 'flex', 'flex-direction': 'column', gap: '10px' }, onsubmit: function (e) {
+          e.preventDefault();
+          var nn = cleanText(n.value, 40), ll = latinDigits(l4.value).trim(), bv = parseAmount(balIn.value, true);
+          if (!nn) return fail('ed', 'اكتب اسم الحساب.');
+          if (ll && !/^\d{4}$/.test(ll)) return fail('ed', 'آخر 4 أرقام فقط.');
+          if (bv === null) return fail('ed', 'اكتب الرصيد رقمًا صحيحًا.');
+          var lv = k.value === 'credit' ? parseAmount(limIn.value) : 0;
+          if (k.value === 'credit' && lv === null) return fail('ed', 'اكتب حد البطاقة.');
+          a.name = nn; a.bank = b.value; a.kind = k.value; a.last4 = ll; a.balance = bv; a.limit = lv || 0; a.asOf = today();
+          ui.editAcct = null; commit('acct', 'حُفظ «' + nn + '».');
+        } }, field('ed-n-' + a.id, 'الاسم', n), field('ed-b-' + a.id, 'البنك', b), field('ed-k-' + a.id, 'النوع', k), field('ed-l-' + a.id, 'آخر 4 أرقام', l4), balW, limW,
+          el('div', { class: 'row', css: { gap: '8px' } }, el('button', { class: 'btn dark small', type: 'submit' }, 'حفظ'),
+            el('button', { type: 'button', class: 'btn ghost small', onclick: function () { ui.editAcct = null; render(); } }, 'إلغاء'))), msgEl('ed'));
+    }
+    var count = sum([S().expenses, S().incomes], function (arr) { return arr.filter(function (x) { return x.acct === a.id; }).length; }) +
+      sum(S().entities, function (e) { return e.moves.filter(function (m) { return m.acct === a.id; }).length; });
+    return el('section', { class: 'card acct-card ' + a.bank },
+      el('div', { class: 'card-head' }, el('div', null, el('div', { class: 'eyebrow' }, bankName(a.bank) + ' · ' + kindName(a.kind)), el('h2', { css: { 'font-size': '17px' } }, a.name)),
+        a.last4 ? el('span', { class: 'pill p num', dir: 'ltr' }, '•••• ' + a.last4) : null),
+      isCr ? el('div', { css: { display: 'flex', 'flex-direction': 'column', gap: '8px' } },
+        el('div', { css: { display: 'flex', 'align-items': 'baseline', gap: '8px' } }, el('span', { class: 'big-num' }, fmt(a.balance)), el('span', { css: { color: 'var(--muted)', 'font-size': '13px' } }, 'مستخدم من ' + fmt(a.limit))),
+        bar(a.limit ? a.balance / a.limit * 100 : 0, a.balance > a.limit * 0.8 ? 'brass' : 'navy'),
+        el('span', { css: { 'font-size': '13px', color: 'var(--muted)' } }, 'المتاح ' + fmt(Math.max(0, a.limit - a.balance)) + ' ر.س'))
+        : el('div', { css: { display: 'flex', 'align-items': 'baseline', gap: '8px' } }, el('span', { class: 'big-num' }, fmt(a.balance)), el('span', { css: { color: 'var(--muted)', 'font-size': '13px' } }, 'ر.س')),
+      el('span', { css: { 'font-size': '12px', color: 'var(--muted)' } }, (a.asOf ? 'آخر تحديث ' + dShort(a.asOf) + '/' + a.asOf.slice(0, 4) : 'لم يُستورد كشف بعد') + (count ? ' · ' + count + ' عملية' : '')),
+      el('div', { class: 'row', css: { gap: '8px' } },
+        el('button', { type: 'button', class: 'btn small', onclick: function () { ui.importAcct = a.id; ui.tab = 'upload'; ui.msgs = {}; render(); window.scrollTo(0, 0); } }, icon('upload'), 'استيراد كشف'),
+        el('button', { type: 'button', class: 'btn ghost small', onclick: function () { ui.editAcct = a.id; ui.msgs = {}; render(); } }, 'تعديل'),
+        delBtn('acct-' + a.id, a.name, function () { S().accounts = S().accounts.filter(function (y) { return y !== a; }); })));
+  }
+
+  // ---------- قراءة PDF داخل المتصفح (PDF.js على نفس الموقع، بدون أي اتصال خارجي)
+  function loadScript(src) {
+    return new Promise(function (res, rej) {
+      var sc = document.createElement('script'); sc.src = src; sc.onload = res; sc.onerror = function () { rej(new Error('load')); };
+      document.head.appendChild(sc);
+    });
+  }
+  var pdfReady = null;
+  function loadPdfJs() {
+    if (pdfReady) return pdfReady;
+    var cfg = window.MASROUFI_PDFJS || { lib: 'vendor/pdfjs/pdf.min.js', worker: 'vendor/pdfjs/pdf.worker.min.js' };
+    // تحميل الـ worker كسكربت عادي يجعل PDF.js يعمل في نفس الصفحة بدون Web Worker
+    pdfReady = loadScript(cfg.worker).then(function () { return loadScript(cfg.lib); }).then(function () {
+      window.pdfjsLib.GlobalWorkerOptions.workerSrc = cfg.worker;
+      return window.pdfjsLib;
+    });
+    pdfReady.catch(function () { pdfReady = null; });
+    return pdfReady;
+  }
+  function pdfLines(buf, password) {
+    return loadPdfJs().then(function (lib) {
+      return lib.getDocument({ data: new Uint8Array(buf), password: password || undefined, isEvalSupported: false, disableFontFace: true, useSystemFonts: false, stopAtErrors: false, disableAutoFetch: true }).promise;
+    }).then(function (doc) {
+      var pages = [];
+      var maxPages = Math.min(doc.numPages, 60);
+      var chain = Promise.resolve();
+      for (var i = 1; i <= maxPages; i++) (function (n) {
+        chain = chain.then(function () { return doc.getPage(n); }).then(function (pg) { return pg.getTextContent(); }).then(function (tc) { pages.push(tc.items); });
+      })(i);
+      return chain.then(function () { doc.destroy(); return pages; });
+    }).then(function (pages) {
+      var lines = [];
+      pages.forEach(function (items, pi) {
+        var rows = [];
+        items.forEach(function (it) {
+          if (!it.str || !it.str.trim()) return;
+          var y = it.transform[5], x = it.transform[4];
+          var row = rows.filter(function (r) { return Math.abs(r.y - y) < 3; })[0];
+          if (!row) { row = { y: y, items: [] }; rows.push(row); }
+          row.items.push({ x: x, w: it.width || 0, s: it.str, rtl: it.dir === 'rtl', fs: Math.abs(it.transform[0]) || Math.abs(it.transform[3]) || 10 });
+        });
+        rows.sort(function (a, b) { return b.y - a.y; });
+        rows.forEach(function (r) { r.items.sort(function (a, b) { return a.x - b.x; }); r.page = pi; r.items = buildCells(r.items); lines.push(r); });
+      });
+      return lines;
+    });
+  }
+
+  // دمج أجزاء النص في خلايا: بعض ملفات PDF تخزن كل حرف عربي لوحده وبترتيب بصري
+  var AR_CH = /[\u0600-\u06FF\uFB50-\uFDFF\uFE70-\uFEFF]/;
+  function joinRun(items, desc) {
+    var arr = items.slice().sort(function (a, b) { return desc ? b.x - a.x : a.x - b.x; });
+    var out = '';
+    arr.forEach(function (it, i) {
+      if (i) {
+        var prev = arr[i - 1];
+        var gap = desc ? prev.x - (it.x + it.w) : it.x - (prev.x + prev.w);
+        if (gap > it.fs * 0.18) out += ' ';
+      }
+      out += it.s;
+    });
+    return out;
+  }
+  function buildCells(items) {
+    var cells = [], cur = null;
+    items.forEach(function (it) {
+      if (cur) {
+        var last = cur.items[cur.items.length - 1];
+        if (it.x - (last.x + last.w) > it.fs * 1.2) cur = null;
+      }
+      if (!cur) { cur = { items: [] }; cells.push(cur); }
+      cur.items.push(it);
+    });
+    return cells.map(function (c) {
+      var x0 = c.items[0].x, last = c.items[c.items.length - 1], x1 = last.x + last.w;
+      var isAr = c.items.some(function (i) { return AR_CH.test(i.s); });
+      var text;
+      if (!isAr) text = joinRun(c.items, false);
+      else {
+        // تقسيم الخلية إلى مقاطع عربية ولاتينية/أرقام، والمقاطع مرتبة من اليمين لليسار
+        var runs = [], r = null;
+        c.items.slice().sort(function (a, b) { return b.x - a.x; }).forEach(function (i) {
+          var ar = AR_CH.test(i.s) || (!/[A-Za-z0-9]/.test(i.s) && (!r || r.ar));
+          if (!r || r.ar !== ar) { r = { ar: ar, items: [] }; runs.push(r); }
+          r.items.push(i);
+        });
+        text = runs.map(function (rr) { return joinRun(rr.items, rr.ar); }).join(' ');
+      }
+      text = text.normalize('NFKC').replace(/\s+/g, ' ').trim();
+      return { x: x0, w: x1 - x0, s: text, rtl: isAr, fs: c.items[0].fs };
+    }).filter(function (c) { return c.s; });
+  }
+
+  var AR_WORDS = ['شراء', 'تحويل', 'سحب', 'راتب', 'رسوم', 'إيداع', 'ايداع', 'حوالة', 'صراف', 'فاتورة', 'سداد', 'وارد', 'صادر', 'عملية', 'مدى', 'نقطة', 'بيع', 'الرصيد', 'التاريخ', 'مدين', 'دائن', 'المبلغ', 'خصم', 'مشتريات'];
+  function revStr(s) {
+    // عكس النص مع الحفاظ على ترتيب الأرقام والحروف اللاتينية داخله
+    return s.split(/([A-Za-z0-9.,:\/\-]+)/).reverse().map(function (part, i, arr) {
+      return /^[A-Za-z0-9.,:\/\-]+$/.test(part) ? part : Array.from(part).reverse().join('');
+    }).join('');
+  }
+  function arScore(s) { return AR_WORDS.reduce(function (n, w) { return n + (s.indexOf(w) >= 0 ? 1 : 0); }, 0); }
+
+  var DATE_RE = /(\d{4}[\/\-.]\d{1,2}[\/\-.]\d{1,2}|\d{1,2}[\/\-.]\d{1,2}[\/\-.]\d{4})/;
+  var EN_MON = { jan: 1, feb: 2, mar: 3, apr: 4, may: 5, jun: 6, jul: 7, aug: 8, sep: 9, oct: 10, nov: 11, dec: 12 };
+  function findDate(s) {
+    var t = latinDigits(s), m = t.match(DATE_RE);
+    if (m) { var d = normDate(m[1]); if (d) return d; }
+    m = t.match(/(\d{1,2})[\s\-]([A-Za-z]{3})[A-Za-z]*[\s\-,]+(\d{4})/);
+    if (m && EN_MON[m[2].toLowerCase()]) { var r = m[3] + '-' + String(EN_MON[m[2].toLowerCase()]).padStart(2, '0') + '-' + m[1].padStart(2, '0'); if (validDate(r)) return r; }
+    return null;
+  }
+  var NUM_RE = /^[(\-]?\d{1,3}(,\d{3})*(\.\d{1,2})[)\-]?$|^[(\-]?\d+\.\d{2}[)\-]?$/;
+  var OUT_WORDS = ['شراء', 'سحب', 'رسوم', 'خصم', 'سداد', 'صادر', 'مدى', 'pos', 'purchase', 'withdraw', 'fee', 'debit', 'payment to', 'atm'];
+  var IN_WORDS = ['راتب', 'إيداع', 'ايداع', 'وارد', 'استرداد', 'salary', 'deposit', 'credit', 'refund', 'incoming'];
+  var SKIP_WORDS = ['افتتاحي', 'الرصيد السابق', 'الرصيد الختامي', 'opening balance', 'closing balance', 'balance brought', 'balance carried', 'إجمالي', 'الإجمالي', 'total'];
+
+  // تحويل أسطر PDF إلى عمليات: تاريخ + وصف + مبلغ، والاتجاه من فرق الرصيد أو من عناوين الأعمدة
+  function parsePdfStatement(lines) {
+    var flat = lines.map(function (l) { return l.items.map(function (i) { return i.s; }).join(' '); });
+    var fwd = 0, bwd = 0;
+    flat.forEach(function (s) { fwd += arScore(s); bwd += arScore(revStr(s)); });
+    var reversed = bwd > fwd * 1.5 && bwd >= 3;
+    var fix = function (s) { return reversed && /[؀-ۿ]/.test(s) ? revStr(s) : s; };
+
+    // أعمدة الجدول من سطر العناوين
+    var cols = null;
+    lines.some(function (l) {
+      var c = {};
+      l.items.forEach(function (it) {
+        var s = fix(it.s).toLowerCase(), cx = it.x + it.w / 2;
+        if (/مدين|debit|withdraw|سحب|مسحوب/.test(s)) c.debit = cx;
+        else if (/دائن|credit|deposit|إيداع|ايداع|مودع/.test(s)) c.credit = cx;
+        else if (/الرصيد|balance/.test(s)) c.balance = cx;
+        else if (/المبلغ|amount/.test(s)) c.amount = cx;
+      });
+      if ((c.debit !== undefined && c.credit !== undefined) || (c.amount !== undefined && c.balance !== undefined)) { cols = c; return true; }
+      return false;
+    });
+    var colOf = function (x) {
+      if (!cols) return null;
+      var best = null, bd = 1e9;
+      Object.keys(cols).forEach(function (k) { var d = Math.abs(cols[k] - x); if (d < bd) { bd = d; best = k; } });
+      return bd < 90 ? best : null;
+    };
+
+    var txs = [], cur = null;
+    lines.forEach(function (l) {
+      var text = fix(l.items.map(function (i) { return i.s; }).join(' '));
+      var date = findDate(text);
+      var nums = [], words = [];
+      l.items.forEach(function (it) {
+        var s = latinDigits(it.s).trim().replace(/\s*(SAR|ر\.?س)\s*/gi, '');
+        if (NUM_RE.test(s)) {
+          var v = Number(s.replace(/[(),\-]/g, '')); var neg = /^[(\-]|[)\-]$/.test(s);
+          if (isFinite(v) && v <= MAX_AMOUNT) nums.push({ v: neg ? -v : v, x: it.x + it.w / 2 });
+        } else if (!DATE_RE.test(latinDigits(it.s))) words.push(it);
+      });
+      if (date && nums.length) {
+        var rtl = words.filter(function (w) { return w.rtl; }).length > words.length / 2;
+        var desc = cleanText(fix((rtl ? words.slice().reverse() : words).map(function (w) { return w.s; }).join(' ')).replace(/\b\d{2}:\d{2}(:\d{2})?\b/g, ''));
+        cur = { date: date, desc: desc, nums: nums };
+        txs.push(cur);
+      } else if (cur && !date && !nums.length && words.length && cur.desc.length < 100) {
+        cur.desc = cleanText(cur.desc + ' ' + fix(words.map(function (w) { return w.s; }).join(' ')));
+      } else if (!date) cur = null;
+    });
+
+    // تحديد المبلغ والرصيد والاتجاه
+    txs.forEach(function (t) {
+      t.amount = null; t.bal = null; t.dir = null;
+      if (cols) {
+        t.nums.forEach(function (n) {
+          var c = colOf(n.x);
+          if (c === 'debit' && n.v) { t.amount = Math.abs(n.v); t.dir = 'out'; }
+          else if (c === 'credit' && n.v) { t.amount = Math.abs(n.v); t.dir = 'in'; }
+          else if (c === 'balance') t.bal = n.v;
+          else if (c === 'amount' && n.v) { t.amount = Math.abs(n.v); if (n.v < 0) t.dir = 'out'; }
+        });
+      }
+      t.nz = t.nums.filter(function (n) { return n.v !== 0; });
+    });
+    // بدون عناوين أعمدة: الرصيد إما أقصى اليسار أو أقصى اليمين، نختار الجهة اللي تعطي تسلسل رصيد متصل
+    if (!cols || txs.every(function (t) { return t.amount === null; })) {
+      var score = function (side) {
+        var sc = 0, prev = null;
+        txs.forEach(function (t) {
+          if (t.nz.length < 2) { if (t.nz.length === 1) prev = null; return; }
+          var bal = side === 'L' ? t.nz[0].v : t.nz[t.nz.length - 1].v;
+          var others = side === 'L' ? t.nz.slice(1) : t.nz.slice(0, -1);
+          if (prev !== null && others.some(function (o) { return Math.abs(Math.abs(bal - prev) - Math.abs(o.v)) < 0.01; })) sc++;
+          prev = bal;
+        });
+        return sc;
+      };
+      var side = score('L') >= score('R') ? 'L' : 'R';
+      txs.forEach(function (t) {
+        if (t.nz.length === 1) { t.amount = null; t.bal = t.nz[0].v; t.balOnly = true; }
+        else if (t.nz.length >= 2) {
+          t.bal = side === 'L' ? t.nz[0].v : t.nz[t.nz.length - 1].v;
+          t.cand = side === 'L' ? t.nz.slice(1) : t.nz.slice(0, -1);
+          t.amount = Math.abs(t.cand[0].v);
+        }
+      });
+    }
+    // ترتيب زمني ثم استنتاج الاتجاه من فرق الرصيد
+    if (txs.length > 1 && txs[0].date > txs[txs.length - 1].date) txs.reverse();
+    var prevBal = null;
+    txs.forEach(function (t) {
+      var low = t.desc.toLowerCase();
+      t.skip = t.balOnly || SKIP_WORDS.some(function (w) { return low.indexOf(w) >= 0; });
+      if (prevBal !== null && t.bal !== null) {
+        var diff = Math.round((t.bal - prevBal) * 100) / 100;
+        if (t.cand) { // جرّب كل الأرقام كمبلغ
+          t.cand.forEach(function (n) { if (Math.abs(Math.abs(diff) - Math.abs(n.v)) < 0.01) t.amount = Math.abs(n.v); });
+        }
+        if (t.amount !== null && Math.abs(diff - t.amount) < 0.01) t.dir = 'in';
+        else if (t.amount !== null && Math.abs(diff + t.amount) < 0.01) t.dir = 'out';
+      }
+      if (!t.dir) t.dir = IN_WORDS.some(function (w) { return low.indexOf(w) >= 0; }) && !OUT_WORDS.some(function (w) { return low.indexOf(w) >= 0; }) ? 'in' : 'out';
+      if (t.bal !== null) prevBal = t.bal;
+    });
+    return { rows: txs.filter(function (t) { return !t.skip && t.amount; }).slice(0, MAX_CSV_ROWS).map(function (t) {
+      return { date: t.date, desc: t.desc || 'عملية بدون وصف', amount: Math.round(t.amount * 100) / 100, dir: t.dir, bal: t.bal };
+    }), sample: flat.slice(0, 40).map(function (s) { return fix(s).replace(/\d/g, '9'); }).join('\n') };
+  }
+
+  // ---------- استيراد كشف الحساب — يُقرأ محليًا فقط
   function viewUpload() {
     var wrap = el('div', { class: 'stack' });
     wrap.appendChild(el('div', { class: 'steps' },
-      el('div', null, 'صدّر الكشف بصيغة CSV'), el('div', null, 'تصنيف تلقائي للعمليات'),
-      el('div', null, 'راجع: شخصي / عهدة / أمانة'), el('div', null, 'اعتمد وحلّل الشهر')));
+      el('div', null, 'اختر الحساب'), el('div', null, 'ارفع كشف PDF أو CSV'),
+      el('div', null, 'راجع: شخصي / عهدة / أمانة / تحويل'), el('div', null, 'اعتمد وحلّل الشهر')));
 
-    var input = el('input', { id: 'csv', type: 'file', accept: '.csv,text/csv,.txt', class: 'sr' });
-    var drop = el('label', { for: 'csv', class: 'drop' }, el('span', { class: 'big' }, icon('upload')),
-      el('strong', { css: { 'font-size': '16px' } }, 'اسحب ملف الكشف هنا أو اضغط للاختيار'),
-      el('span', { css: { 'font-size': '13px', color: 'var(--muted)' } }, 'ملف CSV حتى 2 ميجابايت. يُقرأ داخل متصفحك ولا يُرفع لأي مكان.'),
-      el('span', { css: { 'font-size': '12px', color: 'var(--muted)' } }, 'كشف PDF أو Excel؟ افتحه في Excel أو Numbers واحفظه بصيغة CSV.'), input);
+    var accts = S().accounts;
+    if (!accts.length) wrap.appendChild(el('div', { class: 'callout mid' }, icon('info'), el('div', null, el('strong', null, 'أضف حساباتك أولًا'),
+      el('span', null, 'عشان كل كشف ينربط بحسابه ويتحدث رصيده. '), el('button', { type: 'button', class: 'linkbtn', onclick: function () { ui.tab = 'accounts'; render(); } }, 'اذهب إلى حساباتي'))));
+    var aSel = select([['', accts.length ? 'اختر الحساب…' : 'بدون حساب محدد']].concat(accts.map(function (a) { return [a.id, bankName(a.bank) + ' — ' + acctLabel(a)]; })), ui.importAcct || '');
+    aSel.addEventListener('change', function () { ui.importAcct = aSel.value; });
+    var input = el('input', { id: 'stmt', type: 'file', accept: '.pdf,application/pdf,.csv,text/csv,.txt', class: 'sr' });
+    var drop = el('label', { for: 'stmt', class: 'drop' }, el('span', { class: 'big' }, icon('upload')),
+      el('strong', { css: { 'font-size': '16px' } }, 'اسحب كشف الحساب هنا أو اضغط للاختيار'),
+      el('span', { css: { 'font-size': '13px', color: 'var(--muted)' } }, 'PDF من تطبيق الراجحي أو الإنماء، أو CSV. الملف يُقرأ داخل متصفحك ولا يُرفع لأي مكان.'), input);
+    var passIn = el('input', { type: 'password', autocomplete: 'off', maxlength: '64', dir: 'ltr' });
+    var passWrap = field('stmt-pass', 'كلمة مرور ملف الكشف', passIn, false, 'بعض البنوك تحمي الكشف بكلمة مرور (غالبًا رقم الهوية أو جزء منه). لا تُحفظ.');
+    passWrap.hidden = !ui.pdfPass;
+    var busy = el('p', { class: 'msg', role: 'status' });
     var handle = function (file) {
       if (!file) return;
-      if (file.size > MAX_CSV_BYTES) return fail('csv', 'الملف أكبر من 2 ميجابايت.');
-      if (!/\.(csv|txt)$/i.test(file.name)) return fail('csv', 'اختر ملفًا بصيغة CSV.');
+      if (accts.length && !aSel.value) return fail('csv', 'اختر الحساب اللي يخصه الكشف أولًا.');
+      ui.importAcct = aSel.value;
+      var isPdf = /\.pdf$/i.test(file.name) || file.type === 'application/pdf';
+      if (!isPdf && !/\.(csv|txt)$/i.test(file.name)) return fail('csv', 'اختر ملف PDF أو CSV.');
+      if (file.size > (isPdf ? 15 : 2) * 1024 * 1024) return fail('csv', isPdf ? 'الملف أكبر من 15 ميجابايت.' : 'الملف أكبر من 2 ميجابايت.');
+      ui.lastFile = file;
+      busy.textContent = 'جارٍ قراءة الكشف…';
       file.arrayBuffer().then(function (buf) {
+        if (isPdf) {
+          var head = new TextDecoder('latin1').decode(new Uint8Array(buf.slice(0, 5)));
+          if (head !== '%PDF-') throw { user: 'الملف ليس PDF صالحًا.' };
+          return pdfLines(buf, passIn.value).then(parsePdfStatement).catch(function (err) {
+            if (err && err.name === 'PasswordException') { ui.pdfPass = true; throw { user: passIn.value ? 'كلمة مرور الكشف غير صحيحة.' : 'الكشف محمي بكلمة مرور. اكتبها ثم اختر الملف مرة ثانية.' }; }
+            if (err && err.user) throw err;
+            throw { user: 'تعذّرت قراءة ملف PDF.' };
+          });
+        }
         var text = new TextDecoder('utf-8').decode(buf);
         if ((text.match(/\uFFFD/g) || []).length > 5) { try { text = new TextDecoder('windows-1256').decode(buf); } catch (e) { /* keep utf-8 */ } }
-        var rows = parseStatement(text);
-        if (!rows.length) return fail('csv', 'ما قدرنا نقرأ عمليات من الملف. تأكد أن فيه أعمدة التاريخ والوصف والمبلغ (أو مدين/دائن).');
-        ui.review = rows; say('csv', true, 'قُرئت ' + rows.length + ' عملية. راجع التصنيف ثم اعتمد.'); render();
-      }).catch(function () { fail('csv', 'تعذّرت قراءة الملف.'); });
+        return { rows: parseStatement(text), sample: '' };
+      }).then(function (res) {
+        passIn.value = '';
+        ui.pdfSample = res.sample;
+        if (!res.rows.length) { ui.pdfPass = false; return fail('csv', 'ما قدرنا نتعرف على عمليات في الكشف. إذا كان الكشف صورة ممسوحة ضوئيًا فما يمكن قراءته، وإلا استخدم «نسخ عينة مموّهة» تحت وأرسلها لي.'); }
+        ui.pdfPass = false;
+        res.rows.forEach(function (r) { r.choice = suggest(r.desc, r.dir, ui.importAcct); });
+        ui.review = res.rows; ui.reviewAcct = ui.importAcct;
+        say('csv', true, 'قُرئت ' + res.rows.length + ' عملية' + (findAcct(ui.importAcct) ? ' من «' + findAcct(ui.importAcct).name + '»' : '') + '. راجع التصنيف ثم اعتمد.'); render();
+      }).catch(function (err) { passIn.value = ''; fail('csv', (err && err.user) || 'تعذّرت قراءة الملف.'); });
     };
     input.addEventListener('change', function () { handle(input.files[0]); input.value = ''; });
     drop.addEventListener('dragover', function (e) { e.preventDefault(); drop.classList.add('over'); });
     drop.addEventListener('dragleave', function () { drop.classList.remove('over'); });
     drop.addEventListener('drop', function (e) { e.preventDefault(); drop.classList.remove('over'); handle(e.dataTransfer.files[0]); });
-    wrap.appendChild(el('section', { class: 'card' }, drop, msgEl('csv')));
+    wrap.appendChild(el('section', { class: 'card' },
+      el('div', { class: 'form' }, field('stmt-acct', 'الحساب', aSel, true), passWrap), drop, busy, msgEl('csv'),
+      ui.pdfSample && !ui.review ? el('div', null, el('button', { type: 'button', class: 'btn ghost small', onclick: function () {
+        if (navigator.clipboard) navigator.clipboard.writeText(ui.pdfSample).then(function () { toast('نُسخت العينة. كل الأرقام فيها صارت 9، راجعها قبل ما ترسلها.'); }, function () { toast('تعذّر النسخ.'); });
+      } }, 'نسخ عينة مموّهة للدعم')) : null));
 
     if (ui.review && ui.review.length) {
       var opts = function (r) {
         var o = r.dir === 'out' ? CATS.map(function (c) { return ['p:' + c, 'شخصي — ' + c]; }) : [['in', 'دخل']];
         S().entities.filter(function (e) { return !e.closed || r.dir === 'in'; }).forEach(function (e) { o.push(['e:' + e.id, (e.type === 'c' ? 'عهدة — ' : 'أمانة — ') + e.name]); });
+        o.push(['own', 'تحويل بين حساباتي (لا يُحسب)']);
         o.push(['skip', 'تجاهل']);
         return o;
       };
@@ -1704,13 +2087,16 @@ document.documentElement.setAttribute('dir','rtl');document.documentElement.setA
       ui.review.forEach(function (r, i) {
         var s = select(opts(r), r.choice); s.id = 'rv-' + i;
         s.addEventListener('change', function () { r.choice = s.value; });
-        tbody.appendChild(el('tr', null, el('td', { class: 'num' }, dShort(r.date)), el('td', null, r.desc),
+        var dirBtn = el('button', { type: 'button', class: 'pill ' + (r.dir === 'in' ? 'in' : 'p'), css: { border: 'none', cursor: 'pointer' }, 'aria-label': 'تبديل الاتجاه',
+          onclick: function () { r.dir = r.dir === 'in' ? 'out' : 'in'; r.choice = suggest(r.desc, r.dir, ui.reviewAcct); render(); } }, r.dir === 'in' ? 'وارد' : 'صادر');
+        tbody.appendChild(el('tr', null, el('td', { class: 'num' }, dShort(r.date)), el('td', null, r.desc), el('td', null, dirBtn),
           el('td', { class: 'amt ' + (r.dir === 'in' ? 'c-green' : '') }, (r.dir === 'in' ? '+ ' : '') + fmt(r.amount)),
           el('td', null, el('label', { for: s.id, class: 'sr' }, 'نوع العملية'), s)));
       });
-      wrap.appendChild(el('section', { class: 'card' }, sectionTitle('file', 'مراجعة العمليات قبل الاعتماد'),
-        el('span', { css: { 'font-size': '13px', color: 'var(--muted)' } }, 'التطبيق يقترح النوع، وأنت تعدّل اللي يحتاج. العمليات المكررة (نفس التاريخ والوصف والمبلغ) تُتجاهل تلقائيًا.'),
-        el('div', { class: 'table-wrap' }, el('table', null, el('thead', null, el('tr', null, el('th', null, 'التاريخ'), el('th', null, 'الوصف'), el('th', { class: 'amt' }, 'المبلغ'), el('th', null, 'النوع'))), tbody)),
+      var acc = findAcct(ui.reviewAcct);
+      wrap.appendChild(el('section', { class: 'card' }, el('div', { class: 'card-head' }, sectionTitle('file', 'مراجعة العمليات قبل الاعتماد'), acc ? el('span', { class: 'pill p' }, acctLabel(acc)) : null),
+        el('span', { css: { 'font-size': '13px', color: 'var(--muted)' } }, 'المنصة تقترح النوع والاتجاه، وأنت تعدّل اللي يحتاج. اضغط «وارد/صادر» لو انعكس الاتجاه. العمليات المكررة تُتجاهل تلقائيًا.'),
+        el('div', { class: 'table-wrap' }, el('table', null, el('thead', null, el('tr', null, el('th', null, 'التاريخ'), el('th', null, 'الوصف'), el('th', null, 'الاتجاه'), el('th', { class: 'amt' }, 'المبلغ'), el('th', null, 'النوع'))), tbody)),
         el('div', { class: 'row' },
           el('button', { type: 'button', class: 'btn', onclick: approve }, icon('check'), 'اعتماد وتحليل الشهر'),
           el('button', { type: 'button', class: 'btn ghost', onclick: function () { ui.review = null; ui.msgs = {}; render(); } }, 'إلغاء'))));
@@ -1719,31 +2105,43 @@ document.documentElement.setAttribute('dir','rtl');document.documentElement.setA
   }
 
   function approve() {
-    var added = 0, skipped = 0, lastMonth = null;
+    var added = 0, skipped = 0, own = 0, lastMonth = null, acct = ui.reviewAcct || '';
     var seen = {};
-    S().expenses.forEach(function (x) { seen['p|' + x.date + '|' + x.desc + '|' + x.amount] = 1; });
-    S().incomes.forEach(function (x) { seen['in|' + x.date + '|' + x.note + '|' + x.amount] = 1; });
-    S().entities.forEach(function (e) { e.moves.forEach(function (m) { seen['e|' + m.date + '|' + m.desc + '|' + m.amount] = 1; }); });
+    S().expenses.forEach(function (x) { seen['p|' + (x.acct || '') + '|' + x.date + '|' + x.desc + '|' + x.amount] = 1; });
+    S().incomes.forEach(function (x) { seen['in|' + (x.acct || '') + '|' + x.date + '|' + x.note + '|' + x.amount] = 1; });
+    S().entities.forEach(function (e) { e.moves.forEach(function (m) { seen['e|' + (m.acct || '') + '|' + m.date + '|' + m.desc + '|' + m.amount] = 1; }); });
     ui.review.forEach(function (r) {
       var c = r.choice;
       if (c === 'skip') { skipped++; return; }
+      if (c === 'own') { own++; return; }
+      var base = acct + '|' + r.date + '|' + r.desc + '|' + r.amount;
       if (c.slice(0, 2) === 'p:' && r.dir === 'out') {
-        var key = 'p|' + r.date + '|' + r.desc + '|' + r.amount; if (seen[key]) { skipped++; return; } seen[key] = 1;
-        S().expenses.push({ id: uid(), date: r.date, desc: r.desc, cat: CATS.indexOf(c.slice(2)) >= 0 ? c.slice(2) : 'أخرى', amount: r.amount });
+        if (seen['p|' + base]) { skipped++; return; } seen['p|' + base] = 1;
+        S().expenses.push({ id: uid(), date: r.date, desc: r.desc, cat: CATS.indexOf(c.slice(2)) >= 0 ? c.slice(2) : 'أخرى', amount: r.amount, acct: acct });
       } else if (c === 'in' && r.dir === 'in') {
-        var k2 = 'in|' + r.date + '|' + r.desc + '|' + r.amount; if (seen[k2]) { skipped++; return; } seen[k2] = 1;
-        S().incomes.push({ id: uid(), date: r.date, source: 'من كشف الحساب', amount: r.amount, note: r.desc });
+        if (seen['in|' + base]) { skipped++; return; } seen['in|' + base] = 1;
+        S().incomes.push({ id: uid(), date: r.date, source: 'من كشف الحساب', amount: r.amount, note: r.desc, acct: acct });
       } else if (c.slice(0, 2) === 'e:') {
         var ent = findEnt(c.slice(2)); if (!ent) { skipped++; return; }
-        var k3 = 'e|' + r.date + '|' + r.desc + '|' + r.amount; if (seen[k3]) { skipped++; return; } seen[k3] = 1;
-        ent.moves.push({ id: uid(), date: r.date, dir: r.dir, amount: r.amount, desc: r.desc, invoice: ent.type === 'c' && r.dir === 'out' ? 'no' : '', avail: true, xfer: false, link: '' });
+        if (seen['e|' + base]) { skipped++; return; } seen['e|' + base] = 1;
+        ent.moves.push({ id: uid(), date: r.date, dir: r.dir, amount: r.amount, desc: r.desc, invoice: ent.type === 'c' && r.dir === 'out' ? 'no' : '', avail: true, xfer: false, link: '', acct: acct });
       } else { skipped++; return; }
       added++; if (!lastMonth || mkey(r.date) > lastMonth) lastMonth = mkey(r.date);
     });
-    ui.review = null;
+    // تحديث رصيد الحساب من آخر رصيد في الكشف
+    var a = findAcct(acct), balNote = '';
+    if (a) {
+      var withBal = ui.review.filter(function (r) { return r.bal !== null && r.bal !== undefined; });
+      var last = withBal.sort(function (x, y) { return x.date < y.date ? -1 : x.date > y.date ? 1 : 0; })[withBal.length - 1];
+      if (last && (!a.asOf || last.date >= a.asOf)) {
+        a.balance = Math.round((a.kind === 'credit' ? Math.abs(last.bal) : last.bal) * 100) / 100; a.asOf = last.date;
+        balNote = ' وتحدّث رصيد «' + a.name + '» إلى ' + fmt(a.balance) + ' ر.س';
+      }
+    }
+    ui.review = null; ui.pdfSample = '';
     if (lastMonth) ui.month = lastMonth;
     ui.tab = 'exp';
-    commit('exp', 'اعتُمدت ' + added + ' عملية' + (skipped ? '، وتُجوهلت ' + skipped : '') + '.');
+    commit('exp', 'اعتُمدت ' + added + ' عملية' + (own ? '، و' + own + ' تحويل بين حساباتك ما انحسب' : '') + (skipped ? '، وتُجوهلت ' + skipped : '') + balNote + '.');
   }
 
   // قارئ CSV بسيط يدعم علامات التنصيص والفاصلة أو الفاصلة المنقوطة
@@ -1801,6 +2199,7 @@ document.documentElement.setAttribute('dir','rtl');document.documentElement.setA
     var cDebit = find(h, ['مدين', 'debit', 'سحب', 'withdraw']);
     var cCredit = find(h, ['دائن', 'credit', 'إيداع', 'ايداع', 'deposit']);
     var cAmt = find(h, ['مبلغ', 'amount']);
+    var cBal = find(h, ['رصيد', 'balance']);
     var out = [];
     rows.slice(hi + 1, hi + 1 + MAX_CSV_ROWS).forEach(function (row) {
       var date = normDate(row[cDate] || ''); if (!date) return;
@@ -1812,12 +2211,19 @@ document.documentElement.setAttribute('dir','rtl');document.documentElement.setA
       }
       if (amount === null && cAmt >= 0) { var v = numCell(row[cAmt]); if (v) { amount = Math.abs(v); dir = v < 0 ? 'out' : 'in'; } }
       if (!amount) return;
-      out.push({ date: date, desc: desc, amount: amount, dir: dir, choice: suggest(desc, dir) });
+      var bv = cBal >= 0 ? numCell(row[cBal]) : null;
+      out.push({ date: date, desc: desc, amount: amount, dir: dir, bal: bv, choice: suggest(desc, dir) });
     });
     return out;
   }
-  function suggest(desc, dir) {
+  var OWN_WORDS = ['بين حساباتي', 'تحويل داخلي', 'حساباتي', 'own account', 'between accounts', 'سداد بطاقة', 'سداد البطاقة', 'credit card payment', 'card payment'];
+  function suggest(desc, dir, acctId) {
     var d = desc.toLowerCase();
+    var me = acctId ? findAcct(acctId) : null;
+    if (OWN_WORDS.some(function (w) { return d.indexOf(w) >= 0; })) return 'own';
+    if (me && me.kind === 'credit' && dir === 'in') return 'own';
+    if (dir === 'in' && /راتب|salary|payroll/.test(d)) return 'in';
+    if ((S().accounts || []).some(function (a) { return a.id !== acctId && a.last4 && latinDigits(d).indexOf(a.last4) >= 0; })) return 'own';
     var hit = S().entities.filter(function (e) { return d.indexOf(e.name.toLowerCase().replace(/^(أمانة|عهدة)\s+/, '')) >= 0; })[0];
     if (hit && (dir === 'in' || !hit.closed)) return 'e:' + hit.id;
     if (dir === 'in') return 'in';
