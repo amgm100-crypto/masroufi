@@ -342,3 +342,12 @@ button.pill:focus-visible { outline: 2px solid var(--focus); }
   .main-inner { animation: fade .25s ease-out; }
   @keyframes fade { from { opacity: .4; } }
 }
+
+/* حساباتي */
+.acct-card { border-top: 4px solid var(--bar); }
+.acct-card.alinma { border-top-color: var(--brass); }
+.acct-card.other { border-top-color: var(--line-2); }
+.acct-strip { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; }
+.acct-strip button { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); color: var(--ink); text-align: right; font-size: 12.5px; }
+.acct-strip button:hover { background: var(--surface-2); }
+.acct-strip strong { font-size: 15px; }
