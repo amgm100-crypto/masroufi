@@ -167,7 +167,11 @@
         deadline: validDate(x.deadline) ? x.deadline : '', moves: [] };
       arr(x.moves, 5000).forEach(function (y) {
         var a = amt(y && y.amount); if (!a || !validDate(y.date)) return;
-        e.moves.push({ id: id(y.id), date: y.date, dir: y.dir === 'out' ? 'out' : 'in', amount: a, desc: txt(y.desc) });
+        var dirv = y.dir === 'out' ? 'out' : 'in';
+        e.moves.push({ id: id(y.id), date: y.date, dir: dirv, amount: a, desc: txt(y.desc),
+          invoice: e.type === 'c' && dirv === 'out' && !y.xfer ? (y.invoice === 'yes' ? 'yes' : 'no') : '',
+          avail: !(e.type === 'a' && dirv === 'in' && y.avail === false),
+          xfer: y.xfer === true, link: typeof y.link === 'string' && /^[a-f0-9]{6,32}$/.test(y.link) ? y.link : '' });
       });
       s.entities.push(e);
     });
@@ -218,15 +222,17 @@
     s.entities = [
       { id: uid(), type: 'c', name: 'جمعية خيرية (عهدة)', closed: false, deadline: '', moves: [
         { id: uid(), date: prev + '-02', dir: 'in', amount: 5000, desc: 'استلام عهدة' },
-        { id: uid(), date: prev + '-14', dir: 'out', amount: 3850, desc: 'مستلزمات أنشطة' }] },
+        { id: uid(), date: prev + '-14', dir: 'out', amount: 3210, desc: 'مستلزمات أنشطة', invoice: 'yes' },
+        { id: uid(), date: prev + '-21', dir: 'out', amount: 640, desc: 'مكتبة — مستلزمات حلقات', invoice: 'no' }] },
       { id: uid(), type: 'c', name: 'مشروع عمل (عهدة)', closed: false, deadline: '', moves: [
         { id: uid(), date: prev + '-03', dir: 'in', amount: 2500, desc: 'استلام عهدة' },
-        { id: uid(), date: prev + '-11', dir: 'out', amount: 900, desc: 'اشتراك استضافة' }] },
+        { id: uid(), date: prev + '-11', dir: 'out', amount: 900, desc: 'اشتراك استضافة', invoice: 'yes' }] },
       { id: uid(), type: 'a', name: 'أمانة المسجد', closed: false, deadline: '', moves: [
         { id: uid(), date: prev + '-02', dir: 'in', amount: 6000, desc: 'من متبرع لكتب المسجد' },
         { id: uid(), date: prev + '-20', dir: 'out', amount: 1800, desc: 'شراء مصاحف' }] },
       { id: uid(), type: 'a', name: 'أمانة جمعية', closed: false, deadline: '', moves: [
-        { id: uid(), date: prev + '-18', dir: 'in', amount: 2500, desc: 'مبلغ محفوظ لصالح الجمعية' }] }
+        { id: uid(), date: prev + '-18', dir: 'in', amount: 2500, desc: 'مبلغ محفوظ لصالح الجمعية' },
+        { id: uid(), date: prev + '-25', dir: 'in', amount: 1500, desc: 'دفعة متبقية من الجمعية', avail: false }] }
     ];
     return s;
   }
@@ -323,7 +329,7 @@
 
   // ---------------------------------------------------------------- واجهة
   var root = $('app');
-  function freshUi() { return { tab: 'dash', month: mkey(today()), confirm: null, review: null, msgs: {}, backupText: '' }; }
+  function freshUi() { return { tab: 'dash', month: mkey(today()), confirm: null, review: null, msgs: {}, backupText: '', expanded: {}, xfer: null }; }
   var ui = freshUi();
 
   var toastTimer = null;
@@ -574,8 +580,16 @@
   function entIn(e) { return sum(e.moves.filter(function (m) { return m.dir === 'in'; }), function (m) { return m.amount; }); }
   function entOut(e) { return sum(e.moves.filter(function (m) { return m.dir === 'out'; }), function (m) { return m.amount; }); }
   function entBal(e) { return entIn(e) - entOut(e); }
+  // المتوفر فعليًا: المبالغ المستلمة المتوفرة ناقص المسلّم/المصروف
+  function entAvail(e) { return sum(e.moves.filter(function (m) { return m.dir === 'in' && m.avail !== false; }), function (m) { return m.amount; }) - entOut(e); }
+  function entPending(e) { return sum(e.moves.filter(function (m) { return m.dir === 'in' && m.avail === false; }), function (m) { return m.amount; }); }
+  function missingInvoices(e) { return e.moves.filter(function (m) { return m.dir === 'out' && !m.xfer && m.invoice === 'no'; }); }
+  function removeMove(e, m) {
+    e.moves = e.moves.filter(function (y) { return y !== m; });
+    if (m.link) S().entities.forEach(function (x) { x.moves = x.moves.filter(function (y) { return y.link !== m.link; }); });
+  }
   function ents(type) { return S().entities.filter(function (e) { return e.type === type; }); }
-  function heldOf(type) { return sum(ents(type).filter(function (e) { return !e.closed; }), function (e) { return Math.max(0, entBal(e)); }); }
+  function heldOf(type) { return sum(ents(type).filter(function (e) { return !e.closed; }), function (e) { return Math.max(0, entAvail(e)); }); }
   function monthlyInstallments() { return sum(activeDebts('on'), function (d) { return d.monthly; }); }
   function catTotals(k) {
     var t = {}; CATS.forEach(function (c) { t[c] = 0; });
@@ -752,7 +766,7 @@
       stat('دخلك هذا الشهر', fmt(inc), 'الفائض بعد المصروف والأقساط ' + fmt(inc - spent - inst), { color: 'c-green', icon: 'income' }),
       stat('المتبقي من الديون', fmt(debtRem), 'أقساط شهرية ' + fmt(inst) + ' ر.س', { icon: 'debts' }),
       stat('عهد مفتوحة عندك', fmt(custody), openC ? openC + ' عهدة تحتاج تصفية' : 'لا توجد عهد مفتوحة', { color: 'c-brass', icon: 'custody' }),
-      stat('أمانات محفوظة عندك', fmt(amanat), ents('a').filter(function (e) { return entBal(e) > 0; }).length + ' جهة', { color: 'c-green', icon: 'amanat' })));
+      stat('أمانات متوفرة عندك', fmt(amanat), (function () { var p = sum(ents('a'), entPending); return p ? 'وغير متوفر ' + fmt(p) + ' ر.س' : ents('a').filter(function (e) { return entBal(e) > 0; }).length + ' جهة'; })(), { color: 'c-green', icon: 'amanat' })));
 
     // الرصيد ليس كله لك
     var bal = S().profile.balance;
@@ -949,7 +963,13 @@
     var eCat = select(CATS.map(function (c) { return [c, c]; }), CATS[0]);
     var entOpts = [['p', 'شخصي']].concat(S().entities.filter(function (e) { return !e.closed; }).map(function (e) { return ['e:' + e.id, (e.type === 'c' ? 'عهدة — ' : 'أمانة — ') + e.name]; }));
     var eKind = select(entOpts, 'p'), eAmt = amtInput();
-    eKind.addEventListener('change', function () { eCat.disabled = eKind.value !== 'p'; });
+    var eInv = select([['yes', 'يوجد فاتورة'], ['no', 'لا يوجد فاتورة']], 'yes');
+    var invWrap = field('e-inv', 'الفاتورة', eInv); invWrap.hidden = true;
+    eKind.addEventListener('change', function () {
+      eCat.disabled = eKind.value !== 'p';
+      var en = eKind.value.slice(0, 2) === 'e:' ? findEnt(eKind.value.slice(2)) : null;
+      invWrap.hidden = !(en && en.type === 'c');
+    });
     var card = el('section', { class: 'card' }, sectionTitle('plus', 'إضافة مصروف'),
       el('form', { class: 'form', onsubmit: function (e) {
         e.preventDefault();
@@ -962,12 +982,12 @@
         } else {
           var ent = findEnt(eKind.value.slice(2));
           if (!ent) return fail('exp', 'اختر الجهة من القائمة.');
-          if (a > entBal(ent) + 0.001) return fail('exp', 'المبلغ أكبر من المتبقي في «' + ent.name + '» (' + fmt(entBal(ent)) + ' ر.س).');
-          ent.moves.push({ id: uid(), date: eDate.value, dir: 'out', amount: a, desc: d });
+          if (a > entAvail(ent) + 0.001) return fail('exp', 'المبلغ أكبر من المتوفر في «' + ent.name + '» (' + fmt(entAvail(ent)) + ' ر.س).');
+          ent.moves.push({ id: uid(), date: eDate.value, dir: 'out', amount: a, desc: d, invoice: ent.type === 'c' ? eInv.value : '', avail: true, xfer: false, link: '' });
         }
         ui.month = mkey(eDate.value);
         commit('exp', 'أُضيف إلى مصروفات ' + monthName(ui.month) + '.');
-      } }, field('e-date', 'التاريخ', eDate), field('e-desc', 'الوصف', eDesc, true), field('e-kind', 'النوع', eKind), field('e-cat', 'التصنيف', eCat), field('e-amt', 'المبلغ (ر.س)', eAmt),
+      } }, field('e-date', 'التاريخ', eDate), field('e-desc', 'الوصف', eDesc, true), field('e-kind', 'النوع', eKind), field('e-cat', 'التصنيف', eCat), invWrap, field('e-amt', 'المبلغ (ر.س)', eAmt),
         el('button', { class: 'btn', type: 'submit' }, 'إضافة')), msgEl('exp'));
     wrap.appendChild(card);
 
@@ -992,13 +1012,13 @@
 
     // العمليات
     var rows = S().expenses.filter(function (x) { return mkey(x.date) === k; }).map(function (x) { return { x: x, kind: 'p', cat: x.cat, del: function () { S().expenses = S().expenses.filter(function (y) { return y !== x; }); } }; });
-    S().entities.forEach(function (e) { e.moves.forEach(function (m) { if (mkey(m.date) === k) rows.push({ x: { id: m.id, date: m.date, desc: m.desc || (m.dir === 'in' ? 'استلام' : 'صرف'), amount: m.amount, dir: m.dir }, kind: e.type, cat: e.name, del: function () { e.moves = e.moves.filter(function (y) { return y !== m; }); } }); }); });
+    S().entities.forEach(function (e) { e.moves.forEach(function (m) { if (mkey(m.date) === k) rows.push({ x: { id: m.id, date: m.date, desc: m.desc || (m.dir === 'in' ? 'استلام' : 'صرف'), amount: m.amount, dir: m.dir }, kind: e.type, cat: e.name, m: m, del: function () { removeMove(e, m); } }); }); });
     S().incomes.forEach(function (x) { if (mkey(x.date) === k) rows.push({ x: { id: x.id, date: x.date, desc: x.source + (x.note ? ' — ' + x.note : ''), amount: x.amount, dir: 'in' }, kind: 'in', cat: 'إيراد', del: function () { S().incomes = S().incomes.filter(function (y) { return y !== x; }); } }); });
     rows.sort(function (a, b) { return a.x.date < b.x.date ? 1 : -1; });
     var tbody = el('tbody');
     rows.slice(0, 300).forEach(function (r) {
       tbody.appendChild(el('tr', null, el('td', { class: 'num', css: { color: 'var(--muted)' } }, dShort(r.x.date)), el('td', null, r.x.desc),
-        el('td', { css: { color: 'var(--muted)' } }, r.cat), el('td', null, kindPill(r.kind)),
+        el('td', { css: { color: 'var(--muted)' } }, r.cat), el('td', null, el('span', { class: 'row', css: { gap: '4px' } }, kindPill(r.kind), r.m ? movePill(r.m) : null)),
         el('td', { class: 'amt' }, (r.x.dir === 'in' ? '+ ' : '') + fmt(r.x.amount)),
         el('td', null, delBtn('row-' + r.x.id, r.x.desc, r.del))));
     });
@@ -1086,25 +1106,48 @@
     return wrap;
   }
 
-  // ---------- العهد والأمانات (نفس البنية)
+  // ---------- العهد والأمانات
   function viewCustody() { return viewEntities('c'); }
   function viewAmanat() { return viewEntities('a'); }
+
+  // شارة حالة الحركة: الفاتورة للعهد، والتوفر للأمانات، والتحويل
+  function movePill(m) {
+    if (m.xfer) return el('span', { class: 'pill p' }, 'تحويل');
+    if (m.dir === 'out' && m.invoice === 'yes') return el('span', { class: 'pill ok' }, 'فاتورة ✓');
+    if (m.dir === 'out' && m.invoice === 'no') return el('span', { class: 'pill warn' }, 'بدون فاتورة');
+    if (m.dir === 'in' && m.avail === false) return el('span', { class: 'pill warn' }, 'غير متوفر');
+    return null;
+  }
+
   function viewEntities(type) {
     var isC = type === 'c', key = 'ent' + type;
     var wrap = el('div', { class: 'stack' });
     wrap.appendChild(el('div', { class: 'note' }, icon('info'), isC
-      ? 'مبالغ العهد تُستبعد تلقائيًا من تحليل مصروفك الشخصي، وتظهر هنا حتى تصفّيها مع جهتها.'
-      : 'الأمانات مبالغ محفوظة عندك لغيرك، تُفصل عن مصروفك وعن العهد، وتعرف بالضبط كم عندك لكل جهة.'));
+      ? 'مبالغ العهد تُستبعد تلقائيًا من تحليل مصروفك الشخصي. سجّل مع كل مصروف هل له فاتورة، وتقدر تحوّل المتبقي من العهدة إلى الأمانات.'
+      : 'الأمانات مبالغ مطلوبة منك لجهات أخرى. سجّل المبلغ المطلوب وحدّد هل هو متوفر عندك الآن أو لا، وغيّر حالته لما يتوفر.'));
 
     var list = ents(type);
+    if (list.length) wrap.appendChild(isC ? custodySummary(list) : amanatSummary(list));
+
+    // نموذج تسجيل الحركة
     var sel = select(list.map(function (e) { return [e.id, e.name]; }).concat([['new', isC ? '+ عهدة جديدة' : '+ جهة جديدة']]), list[0] ? list[0].id : 'new');
     var nName = txtInput(isC ? 'مثال: جمعية التحفيظ' : 'مثال: حلقة الحي');
     var nWrap = field(key + '-new', isC ? 'اسم العهدة الجديدة' : 'اسم الجهة الجديدة', nName);
-    nWrap.hidden = sel.value !== 'new';
-    sel.addEventListener('change', function () { nWrap.hidden = sel.value !== 'new'; });
-    var dir = select([['in', 'استلمت مبلغ'], ['out', isC ? 'صرفت من العهدة' : 'سلّمت أو صرفت']], 'in');
+    var dir = select([['in', isC ? 'استلمت مبلغ' : 'مبلغ مطلوب مني'], ['out', isC ? 'صرفت من العهدة' : 'سلّمت للجهة']], 'in');
     var amt = amtInput(), date = dateInput(), desc = txtInput(isC ? 'مثال: مستلزمات حلقات' : 'مثال: من متبرع لكتب المسجد');
-    wrap.appendChild(el('section', { class: 'card' }, sectionTitle('plus', isC ? 'تسجيل حركة عهدة' : 'تسجيل حركة أمانة'),
+    var inv = select([['yes', 'يوجد فاتورة'], ['no', 'لا يوجد فاتورة']], 'yes');
+    var avail = select([['yes', 'متوفر عندي'], ['no', 'غير متوفر حاليًا']], 'yes');
+    var invWrap = field(key + '-inv', 'الفاتورة', inv);
+    var avWrap = field(key + '-av', 'هل المبلغ متوفر؟', avail);
+    var amtWrap = field(key + '-amt', 'المبلغ (ر.س)', amt);
+    var sync = function () {
+      nWrap.hidden = sel.value !== 'new';
+      invWrap.hidden = !(isC && dir.value === 'out');
+      avWrap.hidden = !(!isC && dir.value === 'in');
+      amtWrap.querySelector('label').textContent = !isC && dir.value === 'in' ? 'المبلغ المطلوب (ر.س)' : 'المبلغ (ر.س)';
+    };
+    sel.addEventListener('change', sync); dir.addEventListener('change', sync); sync();
+    wrap.appendChild(el('section', { class: 'card' }, sectionTitle('plus', isC ? 'تسجيل حركة عهدة' : 'تسجيل أمانة'),
       el('form', { class: 'form', onsubmit: function (e) {
         e.preventDefault();
         var a = parseAmount(amt.value);
@@ -1114,49 +1157,157 @@
         if (sel.value === 'new') {
           var n = cleanText(nName.value);
           if (!n) return fail(key, 'اكتب اسم الجهة.');
-          if (dir.value === 'out') return fail(key, 'ابدأ بتسجيل المبلغ المستلم لهذه الجهة أولًا.');
+          if (dir.value === 'out') return fail(key, isC ? 'ابدأ بتسجيل المبلغ المستلم لهذه العهدة أولًا.' : 'ابدأ بتسجيل المبلغ المطلوب لهذه الجهة أولًا.');
           ent = { id: uid(), type: type, name: n, closed: false, deadline: '', moves: [] };
           S().entities.push(ent);
         } else {
           ent = findEnt(sel.value);
           if (!ent) return fail(key, 'اختر الجهة.');
-          if (dir.value === 'out' && a > entBal(ent) + 0.001) return fail(key, 'المبلغ أكبر من المحفوظ عندك لهذه الجهة (' + fmt(entBal(ent)) + ' ر.س).');
+          if (dir.value === 'out' && a > entAvail(ent) + 0.001) return fail(key, 'المبلغ أكبر من المتوفر عندك لهذه الجهة (' + fmt(Math.max(0, entAvail(ent))) + ' ر.س).');
           if (ent.closed && dir.value === 'in') ent.closed = false;
         }
-        ent.moves.push({ id: uid(), date: date.value, dir: dir.value, amount: a, desc: cleanText(desc.value) });
+        ent.moves.push({ id: uid(), date: date.value, dir: dir.value, amount: a, desc: cleanText(desc.value),
+          invoice: isC && dir.value === 'out' ? inv.value : '', avail: isC || dir.value === 'out' || avail.value === 'yes', xfer: false, link: '' });
         commit(key, 'سُجّلت الحركة في «' + ent.name + '».');
-      } }, field(key + '-sel', 'الجهة', sel), nWrap, field(key + '-dir', 'الحركة', dir), field(key + '-amt', 'المبلغ (ر.س)', amt), field(key + '-date', 'التاريخ', date), field(key + '-desc', 'الوصف', desc, true),
+      } }, field(key + '-sel', 'الجهة', sel), nWrap, field(key + '-dir', 'الحركة', dir), amtWrap, invWrap, avWrap, field(key + '-date', 'التاريخ', date), field(key + '-desc', 'الوصف', desc, true),
         el('button', { class: 'btn', type: 'submit' }, 'تسجيل')), msgEl(key)));
 
-    if (!list.length) { wrap.appendChild(emptyOf('inbox', isC ? 'لا توجد عهد بعد. سجّل أول مبلغ استلمته.' : 'لا توجد أمانات بعد.')); return wrap; }
-    wrap.appendChild(el('div', { class: 'grid', css: { 'grid-template-columns': 'repeat(auto-fit, minmax(270px, 1fr))' } }, list.map(function (e) {
-      var i = entIn(e), o = entOut(e), b = i - o;
-      var log = e.moves.slice().sort(function (a, b2) { return a.date < b2.date ? 1 : -1; }).slice(0, 5);
-      var card = el('section', { class: 'card ent-card ' + type },
-        el('div', { class: 'card-head' }, el('h2', { css: { 'font-size': '17px' } }, e.name),
-          isC ? el('span', { class: 'pill ' + (e.closed ? 'a' : 'c') }, e.closed ? 'مصفّاة' : 'مفتوحة') : null));
-      if (isC) {
-        card.appendChild(el('div', { class: 'kv' },
-          el('div', null, el('span', null, 'المستلم'), el('strong', null, fmt(i))),
-          el('div', null, el('span', null, 'المصروف'), el('strong', null, fmt(o))),
-          el('div', null, el('span', null, 'المتبقي'), el('strong', { class: 'c-brass' }, fmt(b)))));
-        card.appendChild(bar(i ? o / i * 100 : 0, 'brass'));
-      } else {
-        card.appendChild(el('div', { css: { display: 'flex', 'align-items': 'baseline', gap: '8px' } }, el('span', { class: 'big-num c-green' }, fmt(b)), el('span', { css: { 'font-size': '14px', color: 'var(--muted)' } }, 'ر.س محفوظة عندك الآن')));
-        card.appendChild(el('div', { class: 'card-head num', css: { 'font-size': '14px', color: 'var(--ink-2)' } }, el('span', null, 'استلمت ' + fmt(i)), el('span', null, 'سلّمت ' + fmt(o))));
-      }
-      card.appendChild(el('div', { class: 'log' }, log.map(function (m) {
-        return el('span', null, el('span', null, dShort(m.date) + ' · ' + (m.dir === 'in' ? 'استلام' : (isC ? 'صرف' : 'تسليم')) + (m.desc ? ' — ' + m.desc : '')), el('b', { class: m.dir === 'in' ? 'in' : '' }, (m.dir === 'in' ? '+ ' : '− ') + fmt(m.amount)));
-      })));
-      card.appendChild(el('div', { class: 'row', css: { gap: '8px' } },
-        isC ? el('button', { type: 'button', class: 'btn ghost small', onclick: function () {
-          if (!e.closed && b > 0.001) { toast('صفِّ المتبقي (' + fmt(b) + ' ر.س) بتسجيل صرف أو تسليم قبل إغلاق العهدة.'); return; }
-          e.closed = !e.closed; persist(); render();
-        } }, e.closed ? 'إعادة فتح' : 'تصفية وإغلاق') : null,
-        delBtn('ent-' + e.id, e.name, function () { S().entities = S().entities.filter(function (y) { return y !== e; }); })));
-      return card;
+    if (!list.length) { wrap.appendChild(emptyOf('inbox', isC ? 'لا توجد عهد بعد. سجّل أول مبلغ استلمته.' : 'لا توجد أمانات بعد. سجّل أول مبلغ مطلوب منك.')); return wrap; }
+    wrap.appendChild(el('div', { class: 'grid', css: { 'grid-template-columns': 'repeat(auto-fit, minmax(300px, 1fr))' } }, list.map(function (e) {
+      return isC ? custodyCard(e) : amanahCard(e);
     })));
     return wrap;
+  }
+
+  function custodySummary(list) {
+    var open = list.filter(function (e) { return !e.closed; });
+    var miss = [].concat.apply([], list.map(missingInvoices));
+    return el('div', { class: 'grid' },
+      stat('المتبقي في العهد المفتوحة', fmt(sum(open, function (e) { return Math.max(0, entBal(e)); })), open.length + ' عهدة مفتوحة', { icon: 'custody', color: 'c-brass' }),
+      stat('مصروفات بدون فاتورة', fmt(sum(miss, function (m) { return m.amount; })), miss.length ? miss.length + ' مصروف يحتاج فاتورة' : 'كل المصروفات لها فواتير', { icon: 'file', color: miss.length ? 'c-red' : 'c-green' }));
+  }
+  function amanatSummary(list) {
+    var req = sum(list, function (e) { return Math.max(0, entBal(e)); });
+    var av = sum(list, function (e) { return Math.max(0, entAvail(e)); });
+    var pend = sum(list, entPending);
+    return el('div', { class: 'grid' },
+      stat('المطلوب منك للجهات', fmt(req), list.length + ' جهة', { icon: 'amanat' }),
+      stat('متوفر عندك', fmt(av), req ? Math.round(av / req * 100) + '% من المطلوب' : null, { icon: 'check', color: 'c-green' }),
+      stat('غير متوفر حاليًا', fmt(pend), pend ? 'يحتاج تدبير قبل التسليم' : 'كل المطلوب متوفر', { icon: 'alert', color: pend ? 'c-red' : 'c-green' }));
+  }
+
+  // سجل الحركات مع إمكانية تعديل حالة الفاتورة أو التوفر
+  function moveLog(e, isC) {
+    var all = e.moves.slice().sort(function (a, b2) { return a.date < b2.date ? 1 : -1; });
+    var expanded = ui.expanded[e.id];
+    var shown = expanded ? all : all.slice(0, 6);
+    var box = el('div', { class: 'log' });
+    shown.forEach(function (m) {
+      var label = m.xfer ? (m.dir === 'out' ? 'تحويل' : 'محوّل') : (m.dir === 'in' ? (isC ? 'استلام' : 'مطلوب') : (isC ? 'صرف' : 'تسليم'));
+      var toggle = null;
+      if (isC && m.dir === 'out' && !m.xfer) {
+        toggle = el('button', { type: 'button', class: 'pill ' + (m.invoice === 'yes' ? 'ok' : 'warn'), css: { border: 'none', cursor: 'pointer' },
+          'aria-label': m.invoice === 'yes' ? 'يوجد فاتورة، اضغط للتغيير' : 'لا يوجد فاتورة، اضغط للتغيير',
+          onclick: function () { m.invoice = m.invoice === 'yes' ? 'no' : 'yes'; persist(); render(); } }, m.invoice === 'yes' ? 'فاتورة ✓' : 'بدون فاتورة');
+      } else if (!isC && m.dir === 'in' && !m.xfer) {
+        toggle = el('button', { type: 'button', class: 'pill ' + (m.avail === false ? 'warn' : 'ok'), css: { border: 'none', cursor: 'pointer' },
+          'aria-label': m.avail === false ? 'غير متوفر، اضغط إذا توفر' : 'متوفر، اضغط للتغيير',
+          onclick: function () { m.avail = m.avail === false; if (!m.avail && entAvail(e) < -0.001) { m.avail = true; toast('ما تقدر تخليه غير متوفر لأنك سلّمت جزءًا منه.'); return; } persist(); render(); } }, m.avail === false ? 'غير متوفر' : 'متوفر ✓');
+      } else if (m.xfer) toggle = el('span', { class: 'pill p' }, 'تحويل');
+      box.appendChild(el('div', { class: 'log-row' },
+        el('div', { class: 'log-main' }, el('span', null, dShort(m.date) + ' · ' + label + (m.desc ? ' — ' + m.desc : '')), toggle),
+        el('div', { class: 'log-side' }, el('b', { class: m.dir === 'in' ? 'in' : '' }, (m.dir === 'in' ? '+ ' : '− ') + fmt(m.amount)),
+          delBtn('mv-' + m.id, m.desc || label, function () { removeMove(e, m); }))));
+    });
+    if (all.length > 6) box.appendChild(el('button', { type: 'button', class: 'linkbtn', onclick: function () { ui.expanded[e.id] = !expanded; render(); } }, expanded ? 'عرض أقل' : 'عرض كل الحركات (' + all.length + ')'));
+    return box;
+  }
+
+  function custodyCard(e) {
+    var i = entIn(e), o = entOut(e), b = i - o;
+    var miss = missingInvoices(e);
+    var card = el('section', { class: 'card ent-card c' },
+      el('div', { class: 'card-head' }, el('h2', { css: { 'font-size': '17px' } }, e.name),
+        el('span', { class: 'pill ' + (e.closed ? 'a' : 'c') }, e.closed ? 'مصفّاة' : 'مفتوحة')),
+      el('div', { class: 'kv' },
+        el('div', null, el('span', null, 'المستلم'), el('strong', null, fmt(i))),
+        el('div', null, el('span', null, 'المصروف'), el('strong', null, fmt(o))),
+        el('div', null, el('span', null, 'المتبقي'), el('strong', { class: 'c-brass' }, fmt(b)))),
+      bar(i ? o / i * 100 : 0, 'brass'));
+    if (miss.length) card.appendChild(el('div', { class: 'callout warn' }, icon('file'), el('div', null,
+      el('strong', null, miss.length + ' مصروف بدون فاتورة'), el('span', { class: 'num' }, 'بمجموع ' + fmt(sum(miss, function (m) { return m.amount; })) + ' ر.س. اجمع فواتيرها قبل التصفية.'))));
+    card.appendChild(moveLog(e, true));
+
+    // تحويل إلى الأمانات
+    if (ui.xfer === e.id) card.appendChild(xferForm(e, b));
+    card.appendChild(el('div', { class: 'row', css: { gap: '8px' } },
+      !e.closed && b > 0.001 && ui.xfer !== e.id ? el('button', { type: 'button', class: 'btn ghost small', onclick: function () { ui.xfer = e.id; ui.msgs = {}; render(); } }, icon('amanat'), 'تحويل إلى الأمانات') : null,
+      el('button', { type: 'button', class: 'btn ghost small', onclick: function () {
+        if (!e.closed && b > 0.001) { toast('صفِّ المتبقي (' + fmt(b) + ' ر.س) بتسجيل صرف أو تحويله للأمانات قبل إغلاق العهدة.'); return; }
+        e.closed = !e.closed; persist(); render();
+        if (e.closed && miss.length) toast('أُغلقت العهدة، وفيها ' + miss.length + ' مصروف بدون فاتورة.');
+      } }, e.closed ? 'إعادة فتح' : 'تصفية وإغلاق'),
+      delBtn('ent-' + e.id, e.name, function () { deleteEntity(e); })));
+    return card;
+  }
+
+  function xferForm(e, bal) {
+    var targets = ents('a');
+    var tSel = select(targets.map(function (x) { return [x.id, x.name]; }).concat([['new', '+ أمانة جديدة']]), targets[0] ? targets[0].id : 'new');
+    var tName = txtInput('اسم الجهة'); tName.value = e.name.replace(/\s*\(عهدة\)\s*$/, '');
+    var tWrap = field('xf-name-' + e.id, 'اسم الأمانة الجديدة', tName);
+    tWrap.hidden = tSel.value !== 'new';
+    tSel.addEventListener('change', function () { tWrap.hidden = tSel.value !== 'new'; });
+    var xAmt = amtInput(); xAmt.value = String(Math.round(bal * 100) / 100);
+    var xDate = dateInput(), xNote = txtInput('اختياري');
+    return composer('amanat', 'تحويل من «' + e.name + '» إلى الأمانات',
+      el('form', { class: 'form', onsubmit: function (ev) {
+        ev.preventDefault();
+        var a = parseAmount(xAmt.value);
+        if (a === null) return fail('xf', 'اكتب المبلغ رقمًا أكبر من صفر.');
+        if (a > entBal(e) + 0.001) return fail('xf', 'المبلغ أكبر من المتبقي في العهدة (' + fmt(entBal(e)) + ' ر.س).');
+        if (!validDate(xDate.value)) return fail('xf', 'اختر تاريخًا صحيحًا.');
+        var target;
+        if (tSel.value === 'new') {
+          var n = cleanText(tName.value);
+          if (!n) return fail('xf', 'اكتب اسم الأمانة.');
+          target = { id: uid(), type: 'a', name: n, closed: false, deadline: '', moves: [] };
+          S().entities.push(target);
+        } else { target = findEnt(tSel.value); if (!target) return fail('xf', 'اختر الأمانة.'); }
+        var link = uid(), note = cleanText(xNote.value);
+        e.moves.push({ id: uid(), date: xDate.value, dir: 'out', amount: a, desc: 'إلى ' + target.name + (note ? ' — ' + note : ''), invoice: '', avail: true, xfer: true, link: link });
+        target.moves.push({ id: uid(), date: xDate.value, dir: 'in', amount: a, desc: 'من عهدة ' + e.name + (note ? ' — ' + note : ''), invoice: '', avail: true, xfer: true, link: link });
+        ui.xfer = null;
+        commit('entc', 'حُوّل ' + fmt(a) + ' ر.س من «' + e.name + '» إلى «' + target.name + '».');
+      } }, field('xf-sel-' + e.id, 'إلى الأمانة', tSel), tWrap, field('xf-amt-' + e.id, 'المبلغ (ر.س)', xAmt), field('xf-date-' + e.id, 'التاريخ', xDate), field('xf-note-' + e.id, 'ملاحظة', xNote),
+        el('div', { class: 'row', css: { gap: '8px' } }, el('button', { class: 'btn', type: 'submit' }, 'تحويل'),
+          el('button', { type: 'button', class: 'btn ghost', onclick: function () { ui.xfer = null; render(); } }, 'إلغاء'))),
+      el('span', { class: 'hint', css: { 'font-size': '12px', color: 'var(--muted)' } }, 'يُخصم المبلغ من العهدة ويُضاف للأمانة كمبلغ متوفر. حذف أي طرف من التحويل يحذف الطرف الثاني.'),
+      msgEl('xf'));
+  }
+
+  function amanahCard(e) {
+    var req = entBal(e), av = entAvail(e), pend = entPending(e), out = entOut(e);
+    var card = el('section', { class: 'card ent-card a' },
+      el('div', { class: 'card-head' }, el('h2', { css: { 'font-size': '17px' } }, e.name),
+        pend > 0 ? el('span', { class: 'pill warn' }, 'غير متوفر بالكامل') : el('span', { class: 'pill ok' }, 'متوفر')),
+      el('div', { css: { display: 'flex', 'align-items': 'baseline', gap: '8px', 'flex-wrap': 'wrap' } },
+        el('span', { class: 'big-num' }, fmt(req)), el('span', { css: { 'font-size': '14px', color: 'var(--muted)' } }, 'ر.س مطلوبة منك الآن')),
+      el('div', { class: 'kv' },
+        el('div', null, el('span', null, 'متوفر'), el('strong', { class: 'c-green' }, fmt(Math.max(0, av)))),
+        el('div', null, el('span', null, 'غير متوفر'), el('strong', { class: pend ? 'c-red' : '' }, fmt(pend))),
+        el('div', null, el('span', null, 'سلّمت'), el('strong', null, fmt(out)))),
+      bar(req > 0 ? Math.max(0, av) / req * 100 : 100));
+    card.appendChild(moveLog(e, false));
+    card.appendChild(el('div', { class: 'row', css: { gap: '8px' } },
+      delBtn('ent-' + e.id, e.name, function () { deleteEntity(e); })));
+    return card;
+  }
+
+  function deleteEntity(e) {
+    var links = e.moves.filter(function (m) { return m.link; }).map(function (m) { return m.link; });
+    S().entities = S().entities.filter(function (y) { return y !== e; });
+    if (links.length) S().entities.forEach(function (x) { x.moves = x.moves.filter(function (m) { return links.indexOf(m.link) < 0; }); });
   }
 
   // ---------- استيراد كشف الحساب (CSV) — يُقرأ محليًا فقط
@@ -1232,7 +1383,7 @@
       } else if (c.slice(0, 2) === 'e:') {
         var ent = findEnt(c.slice(2)); if (!ent) { skipped++; return; }
         var k3 = 'e|' + r.date + '|' + r.desc + '|' + r.amount; if (seen[k3]) { skipped++; return; } seen[k3] = 1;
-        ent.moves.push({ id: uid(), date: r.date, dir: r.dir, amount: r.amount, desc: r.desc });
+        ent.moves.push({ id: uid(), date: r.date, dir: r.dir, amount: r.amount, desc: r.desc, invoice: ent.type === 'c' && r.dir === 'out' ? 'no' : '', avail: true, xfer: false, link: '' });
       } else { skipped++; return; }
       added++; if (!lastMonth || mkey(r.date) > lastMonth) lastMonth = mkey(r.date);
     });

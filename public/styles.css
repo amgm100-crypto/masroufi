@@ -73,6 +73,7 @@
 }
 
 * { box-sizing: border-box; }
+[hidden] { display: none !important; }
 html, body { margin: 0; }
 body { background: var(--paper); color: var(--ink); font-family: var(--font); font-size: 15px; line-height: 1.65; -webkit-font-smoothing: antialiased; }
 button, input, select, textarea { font-family: inherit; font-size: 14px; color: inherit; }
@@ -315,9 +316,13 @@ td select { min-height: 38px; }
 .kv span { font-size: 12px; color: var(--muted); }
 .kv strong { font-size: 17px; font-variant-numeric: tabular-nums; }
 .log { display: flex; flex-direction: column; gap: 6px; font-size: 13px; color: var(--ink-2); border-top: 1px solid var(--line); padding-top: 12px; }
-.log span { display: flex; justify-content: space-between; gap: 10px; }
-.log span b { font-weight: 600; font-variant-numeric: tabular-nums; }
-.log span b.in { color: var(--green); }
+.log-row { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 4px 0; }
+.log-main { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; min-width: 0; }
+.log-side { display: flex; align-items: center; gap: 6px; flex: none; }
+.log b { font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.log b.in { color: var(--green); }
+button.pill:hover { filter: brightness(.95); }
+button.pill:focus-visible { outline: 2px solid var(--focus); }
 .ent-card { border-top: 4px solid var(--brass); }
 .ent-card.a { border-top-color: var(--green-bar); }
 .big-num { font-family: var(--display); font-size: 34px; line-height: 1.2; font-variant-numeric: tabular-nums; }
