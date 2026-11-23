@@ -276,6 +276,18 @@
     return deriveKey(DEFAULT_USER, DEFAULT_PASS, salt, KDF_ITER).then(function (key) { return sealWith(key, salt, st); })
       .then(function (box) { if (!storageSet(VAULT_KEY, box)) throw new Error('storage'); });
   }
+  // كلمة المرور تُوحَّد: الأرقام العربية (١٢٣) تصير لاتينية وتُحذف المسافات في الأطراف،
+  // وعند الفتح نجرّب الصيغة الموحّدة ثم الصيغة كما كُتبت (للخزن القديمة)
+  function normPass(p) { return latinDigits(String(p || '')).trim(); }
+  function openVaultAny(text, user, pass) {
+    var tries = [normPass(pass)];
+    if (pass !== tries[0]) tries.push(pass);
+    var i = 0;
+    var next = function () {
+      return openVault(text, user, tries[i]).catch(function (e) { i++; if (i < tries.length) return next(); throw e; });
+    };
+    return next();
+  }
   function openVault(text, user, pass) {
     var box = JSON.parse(text);
     if (!box || box.app !== 'masroufi' || !box.kdf || !box.iv || !box.ct) throw new Error('bad');
@@ -456,7 +468,7 @@
       var u = normUser(user.value), p = pw.input.value;
       if (!u || !p) { msg.textContent = 'اكتب اسم المستخدم وكلمة المرور.'; return; }
       btn.disabled = true; btn.textContent = 'جارٍ التحقق…';
-      Promise.resolve().then(function () { return openVault(storageGet(VAULT_KEY), u, p); }).then(function (r) {
+      Promise.resolve().then(function () { return openVaultAny(storageGet(VAULT_KEY), u, p); }).then(function (r) {
         guardReset();
         session.key = r.key; session.salt = r.salt; session.state = r.state; session.user = u;
         pw.input.value = '';
@@ -508,7 +520,7 @@
     var fill = el('span', { css: { width: '0%' } });
     var txt = el('span', { class: 'hint', 'aria-live': 'polite' });
     var upd = function () {
-      var s = pwScore(input.value, normUser(userInput ? userInput.value : ''));
+      var s = pwScore(normPass(input.value), normUser(userInput ? userInput.value : ''));
       fill.style.setProperty('width', (s * 25) + '%'); fill.style.setProperty('background', colors[s]);
       txt.textContent = s ? 'قوة كلمة المرور: ' + labels[s] : '';
     };
@@ -532,8 +544,8 @@
       btn, msg);
     form.addEventListener('submit', function (e) {
       e.preventDefault(); msg.textContent = '';
-      var u = normUser(user.value), p = p1.input.value;
-      var err = checkNewCreds(u, p, p2.input.value);
+      var u = normUser(user.value), p = normPass(p1.input.value);
+      var err = checkNewCreds(u, p, normPass(p2.input.value));
       if (err) { msg.textContent = err; return; }
       btn.disabled = true; btn.textContent = 'جارٍ التشفير…';
       var salt = crypto.getRandomValues(new Uint8Array(16));
@@ -1895,12 +1907,12 @@
     wrap.appendChild(el('section', { class: 'card' }, el('div', { class: 'card-head' }, sectionTitle('key', 'بيانات الدخول'), el('span', { class: 'meta', dir: 'ltr' }, session.user || '')),
       el('form', { css: { display: 'grid', gap: '14px', 'grid-template-columns': 'repeat(auto-fit, minmax(220px, 1fr))', 'align-items': 'start' }, onsubmit: function (e) {
         e.preventDefault();
-        var u = normUser(nu.value), np = n1.input.value;
-        var err = checkNewCreds(u, np, n2.input.value);
+        var u = normUser(nu.value), np = normPass(n1.input.value);
+        var err = checkNewCreds(u, np, normPass(n2.input.value));
         if (err) return fail('cred', err);
         credBtn.disabled = true;
         var curPass = cur.input.value;
-        Promise.resolve().then(function () { return openVault(storageGet(VAULT_KEY), session.user, curPass); }).then(function () {
+        Promise.resolve().then(function () { return openVaultAny(storageGet(VAULT_KEY), session.user, curPass); }).then(function () {
           var salt = crypto.getRandomValues(new Uint8Array(16));
           return deriveKey(u, np, salt, KDF_ITER).then(function (key) { session.key = key; session.salt = salt; session.user = u; return persist(); });
         }).then(function () { say('cred', true, 'تحدّثت بيانات الدخول وأُعيد تشفير بياناتك.'); render(); })
@@ -1944,7 +1956,7 @@
         var f = rFile.files[0];
         if (!f) return fail('rs', 'اختر ملف النسخة.');
         if (f.size > MAX_BACKUP_BYTES) return fail('rs', 'الملف كبير جدًا.');
-        f.text().then(function (text) { return openVault(text, rUser.value, rPass.value); }).then(function (r) {
+        f.text().then(function (text) { return openVaultAny(text, rUser.value, rPass.value); }).then(function (r) {
           r.state.setup = false;
           session.state = r.state; rPass.value = '';
           commit('rs', 'استُعيدت النسخة، وصارت مشفّرة ببيانات دخولك الحالية.');
