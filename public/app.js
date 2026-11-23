@@ -155,7 +155,7 @@
       var t = amt(x && x.total); if (!t || !txt(x.name)) return;
       var d = { id: id(x.id), name: txt(x.name), dir: x.dir === 'for' ? 'for' : 'on', total: t,
         paid: Math.min(t, amt(x.paid, true) || 0), monthly: amt(x.monthly, true) || 0,
-        end: cleanText(x.end, 12), payments: [] };
+        end: cleanText(x.end, 12), start: typeof x.start === 'string' && /^\d{4}-\d{2}$/.test(x.start) ? x.start : '', payments: [] };
       arr(x.payments, 2000).forEach(function (y) {
         var a = amt(y && y.amount); if (!a || !validDate(y.date)) return;
         d.payments.push({ id: id(y.id), date: y.date, amount: a });
@@ -599,7 +599,10 @@
   }
   function ents(type) { return S().entities.filter(function (e) { return e.type === type; }); }
   function heldOf(type) { return sum(ents(type).filter(function (e) { return !e.closed; }), function (e) { return Math.max(0, entAvail(e)); }); }
-  function monthlyInstallments() { return sum(activeDebts('on'), function (d) { return d.monthly; }); }
+  // الأقساط تُحسب فقط للديون اللي بدأ سدادها (حسب شهر البداية)
+  function debtStarted(d, k) { return !d.start || d.start <= (k || mkey(today())); }
+  function startNote(d) { return d.start && !debtStarted(d) ? ' · يبدأ ' + monthName(d.start) : ''; }
+  function monthlyInstallments(k) { return sum(activeDebts('on').filter(function (d) { return debtStarted(d, k); }), function (d) { return d.monthly; }); }
   function catTotals(k) {
     var t = {}; CATS.forEach(function (c) { t[c] = 0; });
     S().expenses.forEach(function (x) { if (mkey(x.date) === k) t[x.cat] += x.amount; });
@@ -752,7 +755,7 @@
     var spent = personalOf(k);
     var av = catAverages(k);
     var inc = fixedIncomeOf(k) + otherIncomeOf(k);
-    var inst = monthlyInstallments();
+    var inst = monthlyInstallments(k);
     var debtRem = sum(activeDebts('on'), function (d) { return d.total - debtPaid(d); });
     var custody = heldOf('c'), amanat = heldOf('a');
     var openC = ents('c').filter(function (e) { return !e.closed && entBal(e) > 0; }).length;
@@ -834,7 +837,7 @@
       return el('div', { class: 'debt-card' },
         el('div', { class: 'card-head' }, el('strong', null, d.name), el('span', { class: 'pill ok num' }, Math.round(pct) + '%')),
         el('span', { class: 'rem' }, fmt(d.total - p), el('small', null, 'ر.س متبقي')),
-        bar(pct), el('span', { css: { 'font-size': '12px', color: 'var(--muted)' } }, 'قسط ' + fmt(d.monthly) + (d.end ? ' · ينتهي ' + d.end : '')));
+        bar(pct), el('span', { css: { 'font-size': '12px', color: 'var(--muted)' } }, 'قسط ' + fmt(d.monthly) + (d.end ? ' · ينتهي ' + d.end : '') + startNote(d)));
     })));
     wrap.appendChild(dCard);
     return wrap;
@@ -894,7 +897,7 @@
     wrap.appendChild(el('div', { class: 'grid' },
       stat('إجمالي دخل ' + monthShort(k), fmt(total), null, { hero: true }),
       stat('رواتب ثابتة', fmt(fixed)), stat('إيرادات أخرى', fmt(other)),
-      stat('الفائض بعد المصروف والأقساط', fmt(total - personalOf(k) - monthlyInstallments()), null, { color: 'c-green' })));
+      stat('الفائض بعد المصروف والأقساط', fmt(total - personalOf(k) - monthlyInstallments(k)), null, { color: 'c-green' })));
 
     var srcCard = el('section', { class: 'card' }, sectionTitle('income', 'مصادر دخلك الثابتة'));
     if (!S().sources.length) srcCard.appendChild(emptyOf('inbox', 'لم تضف أي راتب ثابت بعد.'));
@@ -1054,6 +1057,7 @@
       stat('إجمالي الديون', fmt(tot)), stat('المسدَّد', fmt(paid), null, { color: 'c-green' }),
       stat('المتبقي', fmt(tot - paid), null, { hero: true }), stat('الأقساط الشهرية', fmt(monthlyInstallments()))));
 
+    var dStart = el('input', { type: 'month', min: '2000-01', max: '2100-12' });
     var dName = txtInput('مثال: تمويل شخصي'), dType = select([['on', 'دين عليّ'], ['for', 'دين لي عند غيري']], 'on');
     var dTot = amtInput(), dPaid = amtInput(), dMon = amtInput(), dEnd = el('input', { type: 'text', inputmode: 'numeric', placeholder: '2029', maxlength: '4', dir: 'ltr' });
     var add = el('section', { class: 'card', css: { flex: '3 1 420px' } }, sectionTitle('plus', 'إضافة دين'),
@@ -1067,9 +1071,11 @@
         if (p === null || m === null) return fail('debt', 'المسدَّد والقسط لازم يكونان أرقامًا.');
         if (p > t) return fail('debt', 'المسدَّد أكبر من المبلغ الكلي.');
         if (end && !/^20\d\d$/.test(end)) return fail('debt', 'سنة الانتهاء أربعة أرقام مثل 2029.');
-        S().debts.push({ id: uid(), name: n, dir: dType.value, total: t, paid: p, monthly: m, end: end, payments: [] });
+        var st = dStart.value;
+        if (st && !/^\d{4}-\d{2}$/.test(st)) return fail('debt', 'اختر شهر بداية السداد.');
+        S().debts.push({ id: uid(), name: n, dir: dType.value, total: t, paid: p, monthly: m, end: end, start: st, payments: [] });
         commit('debt', dType.value === 'for' ? 'أُضيف إلى «ديون لك عند الآخرين».' : 'أُضيف الدين إلى قائمتك.');
-      } }, field('d-name', 'اسم الدين أو الشخص', dName, true), field('d-type', 'النوع', dType), field('d-tot', 'المبلغ الكلي', dTot), field('d-paid', 'المسدَّد حتى الآن', dPaid), field('d-mon', 'القسط الشهري', dMon), field('d-end', 'سنة الانتهاء', dEnd),
+      } }, field('d-name', 'اسم الدين أو الشخص', dName, true), field('d-type', 'النوع', dType), field('d-tot', 'المبلغ الكلي', dTot), field('d-paid', 'المسدَّد حتى الآن', dPaid), field('d-mon', 'القسط الشهري', dMon), field('d-start', 'بداية السداد', dStart, false, 'اتركه فاضي إذا بدأ'), field('d-end', 'سنة الانتهاء', dEnd),
         el('button', { class: 'btn', type: 'submit' }, 'إضافة')), msgEl('debt'));
 
     var open = S().debts.filter(function (d) { return debtPaid(d) < d.total; });
@@ -1096,7 +1102,7 @@
       act.length ? act.map(function (d) {
         var p = debtPaid(d), pct = p / d.total * 100;
         return el('div', { css: { display: 'flex', 'flex-direction': 'column', gap: '8px', 'padding-bottom': '14px', 'border-bottom': '1px solid var(--line)' } },
-          el('div', { class: 'card-head' }, el('strong', null, d.name), el('span', { class: 'meta num', css: { 'font-size': '13px' } }, 'قسط ' + fmt(d.monthly) + ' ر.س شهريًا' + (d.end ? ' · ينتهي ' + d.end : ''))),
+          el('div', { class: 'card-head' }, el('strong', null, d.name), el('span', { class: 'meta num', css: { 'font-size': '13px' } }, 'قسط ' + fmt(d.monthly) + ' ر.س شهريًا' + (d.end ? ' · ينتهي ' + d.end : '') + startNote(d))),
           bar(pct),
           el('div', { class: 'card-head', css: { 'font-size': '13px' } }, el('span', { class: 'num' }, 'مسدَّد ' + fmt(p) + ' من ' + fmt(d.total) + ' (' + Math.round(pct) + '%)'),
             el('span', { class: 'row', css: { gap: '10px', 'align-items': 'center' } }, el('strong', { class: 'num' }, 'المتبقي ' + fmt(d.total - p) + ' ر.س'),
@@ -1947,6 +1953,37 @@
         el('button', { class: 'btn ghost', type: 'submit' }, 'استعادة')),
       el('span', { class: 'hint', css: { 'font-size': '12px', color: 'var(--muted)' } }, 'الاستعادة تستبدل كل البيانات الحالية.'), msgEl('rs')));
     wrap.appendChild(backup);
+
+    // ملف بيانات جاهز (غير مشفّر) — مثل كشف مصنّف جاهز للإضافة
+    var dFile = el('input', { type: 'file', accept: '.json,application/json' });
+    var dMode = select([['merge', 'إضافة إلى بياناتي الحالية'], ['replace', 'استبدال كل بياناتي']], 'merge');
+    wrap.appendChild(el('section', { class: 'card' }, sectionTitle('upload', 'إضافة بيانات من ملف جاهز'),
+      el('p', { css: { margin: '0', 'font-size': '14px', color: 'var(--ink-2)' } }, 'لملف بيانات مصنّف مسبقًا (عمليات، ديون، عهد، أمانات). يُقرأ ويُشفّر داخل جهازك، واحذف الملف من جهازك بعد الإضافة.'),
+      el('form', { class: 'form', onsubmit: function (e) {
+        e.preventDefault();
+        var f = dFile.files[0];
+        if (!f) return fail('dimp', 'اختر الملف.');
+        if (f.size > MAX_BACKUP_BYTES) return fail('dimp', 'الملف كبير جدًا.');
+        f.text().then(function (text) {
+          var box = JSON.parse(text);
+          if (!box || box.app !== 'masroufi-data' || !box.data) throw new Error('bad');
+          var inc = normalize(box.data), cur = S();
+          if (dMode.value === 'replace') {
+            inc.setup = false; inc.demo = false;
+            inc.profile.lockMinutes = cur.profile.lockMinutes; inc.profile.name = inc.profile.name || cur.profile.name;
+            session.state = inc;
+          } else {
+            ['sources', 'incomes', 'expenses', 'debts', 'entities', 'accounts'].forEach(function (k) {
+              var ids = {}; cur[k].forEach(function (x) { ids[x.id] = 1; });
+              inc[k].forEach(function (x) { if (!ids[x.id]) cur[k].push(x); });
+            });
+            cur.demo = false;
+          }
+          var n = inc.expenses.length + inc.incomes.length + sum(inc.entities, function (x) { return x.moves.length; });
+          commit('dimp', 'أُضيفت البيانات: ' + n + ' عملية و' + inc.debts.length + ' دين.');
+        }).catch(function () { fail('dimp', 'الملف غير صالح.'); });
+      } }, field('dimp-file', 'الملف', dFile, true), field('dimp-mode', 'طريقة الإضافة', dMode), el('button', { class: 'btn ghost', type: 'submit' }, 'إضافة')),
+      msgEl('dimp')));
 
     wrap.appendChild(el('section', { class: 'card' }, sectionTitle('amanat', 'كيف نحمي بياناتك'),
       el('div', { class: 'sec-list' }, [
