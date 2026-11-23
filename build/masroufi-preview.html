@@ -356,11 +356,19 @@ button.pill:focus-visible { outline: 2px solid var(--focus); }
 .acct-strip button:hover { background: var(--surface-2); }
 .acct-strip strong { font-size: 15px; }
 
+.sync-status { font-size: 12.5px; color: var(--rail-muted); display: flex; align-items: center; gap: 8px; padding: 0 4px; }
+.sync-status::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--rail-muted); flex: none; }
+.sync-status.ok::before { background: #4FA88B; }
+.sync-status.busy::before { background: var(--brass); }
+.sync-status.offline::before, .sync-status.gone::before { background: #E07A66; }
+.sync-status.off { display: none; }
+
 </style>
 <div id="app" dir="rtl" lang="ar"></div>
 <script>
 document.documentElement.setAttribute('dir','rtl');document.documentElement.setAttribute('lang','ar');
 window.MASROUFI_PDFJS = { lib: 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js', worker: 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js' };
+window.MASROUFI_SYNC = { url: '', key: '' };
 /* مصروفي — تطبيق مصروف شخصي يعمل بالكامل داخل المتصفح.
  * الأمان:
  *  - كل البيانات مشفّرة بـ AES-GCM 256 بمفتاح مشتق من اسم المستخدم وكلمة المرور (PBKDF2-SHA256، 600,000 دورة).
@@ -673,8 +681,99 @@ window.MASROUFI_PDFJS = { lib: 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.
         if (!storageSet(VAULT_KEY, box)) toast('تعذّر الحفظ في هذا المتصفح. صدّر نسخة احتياطية حتى لا تضيع بياناتك.');
       });
     });
+    if (sync.creds) saving.then(schedulePush);
     return saving;
   }
+
+  // ---------------------------------------------------------------- المزامنة بين الأجهزة
+  // الخادم (Supabase) يحفظ نفس الخزنة المشفّرة فقط. المعرّف والرمز مشتقّان من اسم المستخدم وكلمة المرور
+  // بـ PBKDF2 على جهازك، فالخادم ما يعرف اسمك ولا كلمة مرورك ولا يقدر يفك البيانات.
+  var SYNC = window.MASROUFI_SYNC || { url: 'https://lodyekkanxslaloentmm.supabase.co', key: 'sb_publishable_eqQppiNX3Cb7ECpJhDaMrA_ueaWozXV' };
+  var SYNC_META = 'masroufi.sync.v1';
+  var sync = { creds: null, rev: 0, state: 'off', timer: null, busy: false, dirty: false };
+  function syncMeta() { try { return JSON.parse(storageGet(SYNC_META) || '{}'); } catch (e) { return {}; } }
+  function hexOf(buf) { return Array.prototype.map.call(new Uint8Array(buf), function (b) { return b.toString(16).padStart(2, '0'); }).join(''); }
+  function syncCredsFor(user, pass) {
+    var u = normUser(user);
+    return crypto.subtle.importKey('raw', enc.encode(u + '\u0000' + normPass(pass)), 'PBKDF2', false, ['deriveBits']).then(function (base) {
+      return crypto.subtle.deriveBits({ name: 'PBKDF2', salt: enc.encode('masroufi-sync-v1|' + u), iterations: KDF_ITER, hash: 'SHA-256' }, base, 512);
+    }).then(function (bits) { var h = hexOf(bits); return { id: h.slice(0, 64), token: h.slice(64) }; });
+  }
+  function rpc(name, args) {
+    if (!SYNC.url || !window.fetch) { var off = new Error('off'); off.code = 'off'; return Promise.reject(off); }
+    var ctrl = window.AbortController ? new AbortController() : null;
+    var t = setTimeout(function () { if (ctrl) ctrl.abort(); }, 20000);
+    return fetch(SYNC.url + '/rest/v1/rpc/' + name, { method: 'POST', headers: { 'Content-Type': 'application/json', apikey: SYNC.key },
+      body: JSON.stringify(args), signal: ctrl ? ctrl.signal : undefined, credentials: 'omit', referrerPolicy: 'no-referrer', cache: 'no-store' })
+      .then(function (res) {
+        return res.text().then(function (txt) {
+          clearTimeout(t);
+          var body = null; try { body = JSON.parse(txt); } catch (e) { /* ignore */ }
+          if (!res.ok) { var m = (body && body.message) || ''; var err = new Error(m); var k = /conflict|gone|denied|invalid/.exec(m); err.code = k ? k[0] : 'net'; throw err; }
+          return body;
+        });
+      }, function (e) { clearTimeout(t); e.code = 'net'; throw e; });
+  }
+  function setSyncStatus(st) {
+    sync.state = st;
+    var n = $('sync-status');
+    if (n) { n.textContent = syncLabel(); n.className = 'sync-status ' + st; }
+  }
+  function syncLabel() {
+    return { ok: 'متزامن مع أجهزتك', busy: 'جارٍ المزامنة…', offline: 'غير متصل، يتزامن لاحقًا', off: 'المزامنة غير مفعّلة', gone: 'تغيّرت بيانات الدخول' }[sync.state] || '';
+  }
+  function schedulePush() {
+    if (!sync.creds) return;
+    clearTimeout(sync.timer);
+    sync.timer = setTimeout(pushNow, 1200);
+  }
+  function pushNow() {
+    if (!sync.creds || !session.key) return Promise.resolve();
+    if (sync.busy) { sync.dirty = true; return Promise.resolve(); }
+    sync.busy = true; sync.dirty = false; setSyncStatus('busy');
+    var creds = sync.creds;
+    return saving.then(function () {
+      return rpc('vault_put', { p_id: creds.id, p_token: creds.token, p_box: storageGet(VAULT_KEY), p_base: sync.rev });
+    }).then(function (v) {
+      if (sync.creds !== creds) return;
+      sync.rev = v; storageSet(SYNC_META, JSON.stringify({ id: creds.id, rev: v })); setSyncStatus('ok');
+    }).catch(function (e) {
+      if (e.code === 'conflict') { sync.busy = false; return pullNow(true); }
+      if (e.code === 'gone' || e.code === 'denied') { setSyncStatus('gone'); lock('تغيّرت بيانات الدخول من جهاز آخر. ادخل بالبيانات الجديدة.'); return; }
+      setSyncStatus(e.code === 'off' ? 'off' : 'offline');
+    }).then(function () { sync.busy = false; if (sync.dirty) schedulePush(); });
+  }
+  // جلب أحدث نسخة من الخادم. force: بعد تعارض، نعتمد نسخة الخادم
+  function pullNow(force) {
+    if (!sync.creds || !session.key || sync.busy) return Promise.resolve();
+    sync.busy = true; setSyncStatus('busy');
+    var creds = sync.creds;
+    return rpc('vault_get', { p_id: creds.id, p_token: creds.token }).then(function (rows) {
+      var row = rows && rows[0];
+      if (!row) { sync.busy = false; sync.rev = 0; return pushNow(); }
+      if (!force && row.version <= sync.rev) { sync.busy = false; setSyncStatus('ok'); return; }
+      return openVaultAny(row.box, session.user, session.pass).then(function (r) {
+        if (sync.creds !== creds) return;
+        storageSet(VAULT_KEY, row.box);
+        session.key = r.key; session.salt = r.salt; session.state = r.state;
+        sync.rev = row.version; storageSet(SYNC_META, JSON.stringify({ id: creds.id, rev: row.version }));
+        sync.busy = false; setSyncStatus('ok');
+        render(); toast(force ? 'كان فيه تعديل أحدث من جهاز آخر، فاعتمدناه. راجع آخر تعديل سويته.' : 'تحدّثت بياناتك من جهازك الآخر.');
+      });
+    }).catch(function (e) { sync.busy = false; setSyncStatus(e.code === 'off' ? 'off' : 'offline'); });
+  }
+  function startSync(user, pass) {
+    if (!SYNC.url) { setSyncStatus('off'); return Promise.resolve(); }
+    return syncCredsFor(user, pass).then(function (c) {
+      if (!session.key) return;
+      var m = syncMeta();
+      sync.creds = c; sync.rev = m.id === c.id ? (m.rev | 0) : 0;
+      return pullNow(false);
+    });
+  }
+  function stopSync() { clearTimeout(sync.timer); sync.creds = null; sync.rev = 0; sync.busy = false; sync.state = 'off'; }
+  document.addEventListener('visibilitychange', function () { if (!document.hidden && sync.creds && !sync.busy) pullNow(false); });
+  window.addEventListener('online', function () { if (sync.creds) schedulePush(); });
 
   // حماية من التخمين: تأخير متزايد بعد كل محاولة خاطئة (محفوظ محليًا)
   function guard() {
@@ -704,7 +803,7 @@ window.MASROUFI_PDFJS = { lib: 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.
   function lock(reason) {
     saving.then(function () {
       clearTimeout(idleTimer);
-      session.key = null; session.salt = null; session.state = null; session.user = null;
+      session.key = null; session.salt = null; session.state = null; session.user = null; session.pass = null; stopSync();
       ui = freshUi();
       renderLock(reason);
     });
@@ -831,17 +930,37 @@ window.MASROUFI_PDFJS = { lib: 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.
       var u = normUser(user.value), p = pw.input.value;
       if (!u || !p) { msg.textContent = 'اكتب اسم المستخدم وكلمة المرور.'; return; }
       btn.disabled = true; btn.textContent = 'جارٍ التحقق…';
-      Promise.resolve().then(function () { return openVaultAny(storageGet(VAULT_KEY), u, p); }).then(function (r) {
+      var unlocked = function (r, fromServer) {
         guardReset();
-        session.key = r.key; session.salt = r.salt; session.state = r.state; session.user = u;
+        session.key = r.key; session.salt = r.salt; session.state = r.state; session.user = u; session.pass = p;
         pw.input.value = '';
-        if (r.iter !== KDF_ITER) persist();
+        if (r.iter !== KDF_ITER && !fromServer) persist();
         bumpIdle();
-        if (session.state.setup) renderSetup(); else render();
+        if (session.state.setup) { renderSetup(); return; }
+        render();
+        if (fromServer) toast('أهلًا! جبنا بياناتك من حسابك على أجهزتك الأخرى.');
+        startSync(u, p);
+      };
+      var netDown = false;
+      Promise.resolve().then(function () { return openVaultAny(storageGet(VAULT_KEY), u, p); }).then(function (r) { unlocked(r, false); }, function () {
+        // البيانات مو على هذا الجهاز: نجرّب الخادم
+        btn.textContent = 'نبحث عن حسابك…';
+        return syncCredsFor(u, p).then(function (c) {
+          return rpc('vault_get', { p_id: c.id, p_token: c.token }).then(function (rows) {
+            var row = rows && rows[0];
+            if (!row) throw new Error('nf');
+            return openVaultAny(row.box, u, p).then(function (r) {
+              storageSet(VAULT_KEY, row.box);
+              storageSet(SYNC_META, JSON.stringify({ id: c.id, rev: row.version }));
+              unlocked(r, true);
+            });
+          }, function (e) { if (e.code === 'net') netDown = true; throw e; });
+        });
       }).catch(function () {
         var w = guardFail();
         btn.disabled = false; btn.textContent = 'دخول';
-        msg.textContent = 'اسم المستخدم أو كلمة المرور غير صحيحة' + (w ? '. انتظر ' + w + ' ثانية قبل المحاولة التالية.' : '.');
+        msg.textContent = netDown ? 'ما قدرنا نتصل بالخادم لجلب بياناتك. تأكد من الإنترنت وحاول مرة ثانية.'
+          : 'اسم المستخدم أو كلمة المرور غير صحيحة' + (w ? '. انتظر ' + w + ' ثانية قبل المحاولة التالية.' : '.');
         pw.input.select();
       });
     });
@@ -916,10 +1035,14 @@ window.MASROUFI_PDFJS = { lib: 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.
         var keepLock = session.state.profile.lockMinutes;
         var st = demo.checked ? demoState() : emptyState();
         st.setup = false; st.profile.lockMinutes = keepLock;
-        session.key = key; session.salt = salt; session.state = st; session.user = u;
+        session.key = key; session.salt = salt; session.state = st; session.user = u; session.pass = p;
         p1.input.value = ''; p2.input.value = '';
         return persist();
-      }).then(function () { bumpIdle(); render(); toast('تم. من الآن تدخل باسم المستخدم «' + u + '» وكلمة المرور الجديدة.'); })
+      }).then(function () {
+        bumpIdle(); render(); toast('تم. من الآن تدخل باسم المستخدم «' + u + '» وكلمة المرور الجديدة.');
+        storageDel(SYNC_META);
+        return startSync(u, p);
+      })
         .catch(function () { btn.disabled = false; btn.textContent = 'حفظ والدخول'; msg.textContent = 'تعذّر الحفظ في هذا المتصفح.'; });
     });
     lockShell(el('div', { class: 'lock-card' },
@@ -938,14 +1061,24 @@ window.MASROUFI_PDFJS = { lib: 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.
       if (!open) { box.appendChild(el('button', { type: 'button', class: 'linkbtn', onclick: function () { open = true; draw(); } }, label)); return; }
       var inp = el('input', { id: id, type: 'text', autocomplete: 'off' });
       box.appendChild(el('div', { class: 'callout warn' }, icon('alert'), el('div', null, el('strong', null, 'حذف كل البيانات'),
-        el('span', null, 'ما فيه طريقة لفتح البيانات بدون كلمة المرور. الحل الوحيد حذفها من هذا الجهاز، وبعدها تدخل بالبيانات الافتراضية من جديد (أو تستعيد نسخة احتياطية).'))));
+        el('span', null, 'ما فيه طريقة لفتح البيانات بدون كلمة المرور. الحل الوحيد حذفها من هذا الجهاز، وبعدها تدخل بالبيانات الافتراضية من جديد (أو تستعيد نسخة احتياطية). النسخة المحفوظة على الخادم تبقى، لكنها ما تنفتح إلا بنفس كلمة المرور.'))));
       box.appendChild(el('div', { class: 'field' }, el('label', { for: id }, 'اكتب كلمة «احذف» للتأكيد'), inp));
+      var delSrv = null;
+      if (id === 'set-wipe' && sync.creds) {
+        delSrv = el('input', { id: id + '-srv', type: 'checkbox' });
+        box.appendChild(el('label', { for: id + '-srv', css: { display: 'flex', gap: '8px', 'align-items': 'center', 'font-size': '14px' } }, delSrv, 'احذفها أيضًا من الخادم ومن كل أجهزتي'));
+      }
       box.appendChild(el('div', { class: 'row', css: { gap: '8px' } },
         el('button', { type: 'button', class: 'btn danger small', onclick: function () {
           if (cleanText(inp.value) !== 'احذف') { inp.focus(); return; }
-          storageDel(VAULT_KEY); guardReset();
-          session.key = null; session.state = null; session.user = null; ui = freshUi();
-          renderLock('حُذفت البيانات من هذا الجهاز. ادخل بالبيانات الافتراضية.');
+          var srv = id === 'set-wipe' && sync.creds && delSrv && delSrv.checked ? rpc('vault_delete', { p_id: sync.creds.id, p_token: sync.creds.token }) : Promise.resolve();
+          srv.then(function () { return true; }, function () { return false; }).then(function (okSrv) {
+            storageDel(VAULT_KEY); storageDel(SYNC_META); guardReset();
+            session.key = null; session.state = null; session.user = null; session.pass = null; stopSync(); ui = freshUi();
+            renderLock(id === 'set-wipe' && delSrv && delSrv.checked
+              ? (okSrv ? 'حُذفت بياناتك من هذا الجهاز ومن الخادم.' : 'حُذفت البيانات من هذا الجهاز، وتعذّر حذفها من الخادم.')
+              : 'حُذفت البيانات من هذا الجهاز. إذا كانت محفوظة على حسابك، ادخل باسم المستخدم وكلمة المرور وترجع.');
+          });
         } }, icon('trash'), 'حذف كل البيانات'),
         el('button', { type: 'button', class: 'btn ghost small', onclick: function () { open = false; draw(); } }, 'إلغاء')));
       inp.focus();
@@ -1085,6 +1218,7 @@ window.MASROUFI_PDFJS = { lib: 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.
           el('span', { class: 'k' }, payday ? 'موعد الراتب' : 'ابدأ من هنا'),
           el('span', { class: 'v' }, payday ? nextPay(payday.day) : 'أضف رواتبك'),
           el('p', null, 'بعد نزول الراتب صدّر كشف الشهر واستورده، والمنصة تفصل لك الشخصي عن العهد والأمانات.')),
+        el('div', { id: 'sync-status', class: 'sync-status ' + sync.state, role: 'status' }, syncLabel()),
         el('button', { type: 'button', class: 'lock-btn', onclick: doLock }, icon('lock'), 'قفل المنصة')));
 
     var tools = null;
@@ -2275,11 +2409,29 @@ window.MASROUFI_PDFJS = { lib: 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.
         if (err) return fail('cred', err);
         credBtn.disabled = true;
         var curPass = cur.input.value;
+        var stage = 'verify';
         Promise.resolve().then(function () { return openVaultAny(storageGet(VAULT_KEY), session.user, curPass); }).then(function () {
+          stage = 'rekey';
           var salt = crypto.getRandomValues(new Uint8Array(16));
-          return deriveKey(u, np, salt, KDF_ITER).then(function (key) { session.key = key; session.salt = salt; session.user = u; return persist(); });
-        }).then(function () { say('cred', true, 'تحدّثت بيانات الدخول وأُعيد تشفير بياناتك.'); render(); })
-          .catch(function () { fail('cred', 'كلمة المرور الحالية غير صحيحة.'); });
+          return deriveKey(u, np, salt, KDF_ITER).then(function (key) {
+            return sealWith(key, salt, session.state).then(function (box) {
+              // على الخادم: نقل الخزنة للمعرّف الجديد قبل الاعتماد محليًا، حتى تبقى أجهزتك متوافقة
+              var server = sync.creds ? syncCredsFor(u, np).then(function (nc) {
+                stage = 'server';
+                return rpc('vault_rotate', { p_id: sync.creds.id, p_token: sync.creds.token, p_new_id: nc.id, p_new_token: nc.token, p_box: box }).then(function () {
+                  sync.creds = nc; sync.rev = 1; storageSet(SYNC_META, JSON.stringify({ id: nc.id, rev: 1 }));
+                });
+              }) : Promise.resolve();
+              return server.then(function () {
+                storageSet(VAULT_KEY, box);
+                session.key = key; session.salt = salt; session.user = u; session.pass = np;
+              });
+            });
+          });
+        }).then(function () { say('cred', true, 'تحدّثت بيانات الدخول' + (sync.creds ? ' على كل أجهزتك' : '') + '. ادخل بها من الآن.'); render(); })
+          .catch(function () {
+            fail('cred', stage === 'verify' ? 'كلمة المرور الحالية غير صحيحة.' : stage === 'server' ? 'ما قدرنا نحدّث الخادم، فما تغيّر شي. تأكد من الإنترنت وحاول مرة ثانية.' : 'تعذّر تحديث بيانات الدخول.');
+          });
       } },
         cur.wrap, field('cr-user', 'اسم المستخدم', nu, false, 'حروف إنجليزية صغيرة أو أرقام أو . _ -'), n1.wrap, n2.wrap,
         el('div', { css: { 'grid-column': '1 / -1', display: 'flex', 'flex-direction': 'column', gap: '10px' } }, strengthMeter(n1.input, nu), el('div', null, credBtn))), msgEl('cred')));

@@ -351,3 +351,10 @@ button.pill:focus-visible { outline: 2px solid var(--focus); }
 .acct-strip button { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); color: var(--ink); text-align: right; font-size: 12.5px; }
 .acct-strip button:hover { background: var(--surface-2); }
 .acct-strip strong { font-size: 15px; }
+
+.sync-status { font-size: 12.5px; color: var(--rail-muted); display: flex; align-items: center; gap: 8px; padding: 0 4px; }
+.sync-status::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--rail-muted); flex: none; }
+.sync-status.ok::before { background: #4FA88B; }
+.sync-status.busy::before { background: var(--brass); }
+.sync-status.offline::before, .sync-status.gone::before { background: #E07A66; }
+.sync-status.off { display: none; }

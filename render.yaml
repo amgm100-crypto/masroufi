@@ -9,7 +9,7 @@ services:
     headers:
       - path: /*
         name: Content-Security-Policy
-        value: "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; font-src 'self'; connect-src 'none'; form-action 'none'; base-uri 'none'; object-src 'none'; frame-ancestors 'none'; upgrade-insecure-requests"
+        value: "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; font-src 'self'; connect-src https://lodyekkanxslaloentmm.supabase.co; form-action 'none'; base-uri 'none'; object-src 'none'; frame-ancestors 'none'; upgrade-insecure-requests"
       - path: /*
         name: Strict-Transport-Security
         value: "max-age=63072000; includeSubDomains; preload"
